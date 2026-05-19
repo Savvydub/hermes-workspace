@@ -13,17 +13,16 @@ import {
   Notification03Icon,
   PaintBoardIcon,
   Settings02Icon,
+  SparklesIcon,
   Sun01Icon,
   VolumeHighIcon,
 } from '@hugeicons/core-free-icons'
-import { Component, useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useState } from 'react'
 import type * as React from 'react'
 import type { AccentColor, SettingsThemeMode } from '@/hooks/use-settings'
 import type { LoaderStyle } from '@/hooks/use-chat-settings'
 import type { BrailleSpinnerPreset } from '@/components/ui/braille-spinner'
 import type { ThemeId } from '@/lib/theme'
-import type {LocaleId} from '@/lib/i18n';
-import { GROQ_STT_MODELS, STT_PROVIDER_OPTIONS } from '@/lib/stt-config'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { applyTheme, useSettings } from '@/hooks/use-settings'
@@ -57,15 +56,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-// ── Language ────────────────────────────────────────────────────────────
-
-import { LOCALE_LABELS,  getLocale, setLocale } from '@/lib/i18n'
-
 // ── Types ───────────────────────────────────────────────────────────────
 
 type SectionId =
-  | 'claude'
+  | 'hermes'
   | 'agent'
+  | 'routing'
   | 'voice'
   | 'display'
   | 'appearance'
@@ -74,8 +70,9 @@ type SectionId =
   | 'language'
 
 const SECTIONS: Array<{ id: SectionId; label: string; icon: any }> = [
-  { id: 'claude', label: 'Model & Provider', icon: CloudIcon },
+  { id: 'hermes', label: 'Model & Provider', icon: CloudIcon },
   { id: 'agent', label: 'Agent', icon: Settings02Icon },
+  { id: 'routing', label: 'Smart Routing', icon: SparklesIcon },
   { id: 'voice', label: 'Voice', icon: VolumeHighIcon },
   { id: 'display', label: 'Display', icon: PaintBoardIcon },
   { id: 'appearance', label: 'Theme', icon: PaintBoardIcon },
@@ -85,10 +82,10 @@ const SECTIONS: Array<{ id: SectionId; label: string; icon: any }> = [
 ]
 
 const DARK_ENTERPRISE_THEMES = new Set<ThemeId>([
-  'claude-nous',
-  'claude-official',
-  'claude-classic',
-  'claude-slate',
+  'hermes-nous',
+  'hermes-official',
+  'hermes-classic',
+  'hermes-slate',
 ])
 
 function _isDarkEnterpriseTheme(theme: string | null): theme is ThemeId {
@@ -188,12 +185,7 @@ const PROVIDER_CARDS: Array<{
     id: 'nous',
     name: 'Nous Portal',
     logo: '/providers/nous.png',
-    models: [
-      'xiaomi/mimo-v2-pro',
-      'xiaomi/mimo-v2-omni',
-      'claude-3-llama-3.1-405b',
-      'claude-3-llama-3.1-70b',
-    ],
+    models: ['xiaomi/mimo-v2-pro', 'xiaomi/mimo-v2-omni', 'hermes-3-llama-3.1-405b', 'hermes-3-llama-3.1-70b'],
     authType: 'oauth',
   },
   {
@@ -243,69 +235,13 @@ const PROVIDER_CARDS: Array<{
     authType: 'api_key',
     envKey: 'XIAOMI_API_KEY',
   },
-  { id: 'custom', name: 'Custom', logo: '', models: [], authType: 'api_key', envKey: 'CUSTOM_API_KEY' },
+  { id: 'custom', name: 'Custom', logo: '', models: [], authType: 'api_key' },
 ]
-
-export type ProviderClickAction = 'select' | 'oauth' | 'local' | 'custom' | 'ignore'
-
-export function getProviderClickAction(input: {
-  providerId?: string
-  authType: 'oauth' | 'api_key' | 'none'
-  hasKey: boolean
-}): ProviderClickAction {
-  if (input.providerId === 'custom') return 'custom'
-  if (input.authType === 'oauth') return 'oauth'
-  if (input.authType === 'none') return 'local'
-  return input.hasKey ? 'select' : 'ignore'
-}
-
-const LOCAL_PROVIDER_SETUP: Partial<Record<
-  string,
-  { baseUrl: string; unavailableMessage: string }
->> = {
-  ollama: {
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    unavailableMessage:
-      'No Ollama endpoint detected at http://127.0.0.1:11434/v1.',
-  },
-  'atomic-chat': {
-    baseUrl: 'http://127.0.0.1:1337/v1',
-    unavailableMessage:
-      'No Atomic Chat endpoint detected at http://127.0.0.1:1337/v1.',
-  },
-}
-
-export type OAuthStatus = 'idle' | 'starting' | 'pending' | 'success' | 'error'
-
-const DEFAULT_OAUTH_EXPIRES_SECONDS = 600
-const DEFAULT_OAUTH_POLL_INTERVAL_SECONDS = 3
-
-export function getOAuthStartButtonLabel(status: OAuthStatus): string {
-  return status === 'starting' || status === 'pending'
-    ? 'Waiting...'
-    : 'Start OAuth'
-}
-
-type OAuthDeviceCodeResponse = {
-  device_code?: string
-  user_code?: string
-  verification_uri_complete?: string
-  interval?: number
-  expires_in?: number
-  error?: string
-}
-
-type OAuthPollResponse = {
-  status?: string
-  message?: string
-}
 
 function HermesContent() {
   const configAvailable = useFeatureAvailable('config')
   const [activeProvider, setActiveProvider] = useState('')
   const [activeModel, setActiveModel] = useState('')
-  const [defaultProvider, setDefaultProvider] = useState('')
-  const [defaultModelId, setDefaultModelId] = useState('')
   const [availableModels, setAvailableModels] = useState<Array<string>>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
@@ -316,61 +252,40 @@ function HermesContent() {
   )
   const [memEnabled, setMemEnabled] = useState(true)
   const [userProfileEnabled, setUserProfileEnabled] = useState(true)
-  const [customBaseUrl, setCustomBaseUrl] = useState('')
-  const [customModel, setCustomModel] = useState('')
-  const [oauthProviderId, setOauthProviderId] = useState<string | null>(null)
-  const [oauthStatus, setOauthStatus] = useState<OAuthStatus>('idle')
-  const [oauthMessage, setOauthMessage] = useState('')
-  const [oauthUserCode, setOauthUserCode] = useState('')
-  const [oauthVerificationUri, setOauthVerificationUri] = useState('')
-  const oauthAbortRef = useRef<AbortController | null>(null)
-  const [localProviderId, setLocalProviderId] = useState<string | null>(null)
   const [localDiscovery, setLocalDiscovery] = useState<{
-    providers: Array<{
-      id: string
-      name: string
-      online: boolean
-      modelCount: number
-      configured: boolean
-      needsRestart: boolean
-    }>
+    providers: Array<{ id: string; name: string; online: boolean; modelCount: number; configured: boolean; needsRestart: boolean }>
     models: Array<{ id: string; name: string; provider: string }>
   } | null>(null)
 
-  const fetchModelsForProvider = useCallback(
-    (providerId: string) => {
-      // For local providers, prefer auto-discovered models first
-      if (localDiscovery) {
-        const discovered = localDiscovery.models
-          .filter((m) => m.provider === providerId)
-          .map((m) => m.id)
-        if (discovered.length > 0) {
-          setAvailableModels(discovered)
-          return
-        }
+  const fetchModelsForProvider = useCallback((providerId: string) => {
+    // For local providers, prefer auto-discovered models first
+    if (localDiscovery) {
+      const discovered = localDiscovery.models
+        .filter((m) => m.provider === providerId)
+        .map((m) => m.id)
+      if (discovered.length > 0) {
+        setAvailableModels(discovered)
+        return
       }
-      fetch(
-        `/api/claude-proxy/api/available-models?provider=${encodeURIComponent(providerId)}`,
-      )
-        .then((r) => r.json())
-        .then((d: { models?: Array<{ id: string }> }) => {
-          setAvailableModels((d.models || []).map((m) => m.id))
-        })
-        .catch(() => {
-          // Fall back to hardcoded
-          const card = PROVIDER_CARDS.find((p) => p.id === providerId)
-          setAvailableModels(card?.models || [])
-        })
-    },
-    [localDiscovery],
-  )
+    }
+    fetch(
+      `/api/hermes-proxy/api/available-models?provider=${encodeURIComponent(providerId)}`,
+    )
+      .then((r) => r.json())
+      .then((d: { models?: Array<{ id: string }> }) => {
+        setAvailableModels((d.models || []).map((m) => m.id))
+      })
+      .catch(() => {
+        // Fall back to hardcoded
+        const card = PROVIDER_CARDS.find((p) => p.id === providerId)
+        setAvailableModels(card?.models || [])
+      })
+  }, [localDiscovery])
 
   useEffect(() => {
     fetch('/api/local-providers')
       .then((r) => r.json())
-      .then((d: any) => {
-        if (d.ok) setLocalDiscovery(d)
-      })
+      .then((d: any) => { if (d.ok) setLocalDiscovery(d) })
       .catch(() => {})
   }, [])
 
@@ -380,8 +295,6 @@ function HermesContent() {
       .then((d: any) => {
         setActiveProvider(d.activeProvider || '')
         setActiveModel(d.activeModel || '')
-        setDefaultProvider(d.activeProvider || '')
-        setDefaultModelId(d.activeModel || '')
         if (d.activeProvider) fetchModelsForProvider(d.activeProvider)
         const mem = (d.config?.memory as Record<string, unknown>) || {}
         setMemEnabled(mem.memory_enabled !== false)
@@ -389,47 +302,18 @@ function HermesContent() {
         // Build configured keys map
         const keys: Record<string, string> = {}
         for (const p of d.providers || []) {
-          const envKey = p.envKeys?.[0]
-          if (!p.configured || !envKey) continue
-          keys[envKey] = p.maskedCredentials?.[envKey] || '••••'
+          if (p.configured && p.envKeys?.[0])
+            keys[p.envKeys[0]] = p.maskedKeys?.[p.envKeys[0]] || '••••'
         }
         setConfiguredKeys(keys)
-        // Load custom provider config (may be stored as 'custom' or legacy 'manifest')
-        const cfgProviders = (d.config?.providers as Record<string, any>) || {}
-        const customCfg = cfgProviders['custom'] || cfgProviders['manifest'] || {}
-        if (customCfg.base_url) setCustomBaseUrl(customCfg.base_url)
-        if (d.activeProvider === 'custom' && d.activeModel) {
-          setCustomModel(d.activeModel)
-        }
       })
       .catch(() => {})
   }, [])
 
-  const refreshConfig = async () => {
-    const ref = await fetch('/api/hermes-config')
-    const d = await ref.json()
-    setDefaultProvider(d.activeProvider || '')
-    setDefaultModelId(d.activeModel || '')
-    if (
-      (d.activeProvider === 'custom' || d.activeProvider === 'manifest') &&
-      d.activeModel
-    ) {
-      setCustomModel(d.activeModel)
-    }
-    const keys: Record<string, string> = {}
-    for (const p of d.providers || []) {
-      const envKey = p.envKeys?.[0]
-      if (!p.configured || !envKey) continue
-      keys[envKey] = p.maskedCredentials?.[envKey] || '••••'
-    }
-    setConfiguredKeys(keys)
-  }
-
-  const save = async (
-    updates:
-      | { config?: Record<string, unknown>; env?: Record<string, string> }
-      | { action: string; [key: string]: unknown },
-  ) => {
+  const save = async (updates: {
+    config?: Record<string, unknown>
+    env?: Record<string, string>
+  }) => {
     setSaving(true)
     setMsg(null)
     try {
@@ -440,7 +324,16 @@ function HermesContent() {
       })
       const r = (await res.json()) as { message?: string }
       setMsg(r.message || 'Saved')
-      await refreshConfig()
+      const ref = await fetch('/api/hermes-config')
+      const d = await ref.json()
+      setActiveProvider(d.activeProvider || '')
+      setActiveModel(d.activeModel || '')
+      const keys: Record<string, string> = {}
+      for (const p of d.providers || []) {
+        if (p.configured && p.envKeys?.[0])
+          keys[p.envKeys[0]] = p.maskedKeys?.[p.envKeys[0]] || '••••'
+      }
+      setConfiguredKeys(keys)
       setTimeout(() => setMsg(null), 3000)
     } catch {
       setMsg('Failed to save')
@@ -448,163 +341,15 @@ function HermesContent() {
     setSaving(false)
   }
 
-  const setDefaultModel = (providerId: string, modelId: string) => {
-    return save({ action: 'set-default-model', providerId, modelId })
-  }
-
   const selectProvider = (providerId: string, model?: string) => {
-    setOauthProviderId(null)
-    setLocalProviderId(null)
-    if (providerId !== activeProvider) setActiveModel('')
     setActiveProvider(providerId)
-    if (model) setActiveModel(model)
-    else fetchModelsForProvider(providerId)
-  }
-
-  const clearProviderPreview = () => {
-    setActiveProvider('')
-    setActiveModel('')
-    setAvailableModels([])
-  }
-
-  const abortOAuth = () => {
-    oauthAbortRef.current?.abort()
-    oauthAbortRef.current = null
-  }
-
-  const resetOAuthState = (providerId: string) => {
-    abortOAuth()
-    setOauthProviderId(providerId)
-    setLocalProviderId(null)
-    clearProviderPreview()
-    setOauthStatus('idle')
-    setOauthMessage('')
-    setOauthUserCode('')
-    setOauthVerificationUri('')
-    setMsg(null)
-  }
-
-  const showLocalProviderSetup = (providerId: string) => {
-    abortOAuth()
-    setOauthProviderId(null)
-    setLocalProviderId(providerId)
-    clearProviderPreview()
-    setMsg(null)
-  }
-
-  const showCustomProviderSetup = () => {
-    abortOAuth()
-    setOauthProviderId(null)
-    setLocalProviderId(null)
-    setActiveProvider('custom')
-    setAvailableModels([])
-    setMsg(null)
-  }
-
-  useEffect(() => {
-    return () => abortOAuth()
-  }, [])
-
-  const sleepUnlessAborted = (ms: number, signal: AbortSignal) =>
-    new Promise<void>((resolve, reject) => {
-      const timer = globalThis.setTimeout(() => {
-        signal.removeEventListener('abort', onAbort)
-        resolve()
-      }, ms)
-      const onAbort = () => {
-        clearTimeout(timer)
-        reject(new DOMException('Aborted', 'AbortError'))
-      }
-      if (signal.aborted) {
-        onAbort()
-        return
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-    })
-
-  const startOAuthFlow = async () => {
-    const provider = PROVIDER_CARDS.find((p) => p.id === oauthProviderId)
-    if (!provider) return
-
-    abortOAuth()
-    const controller = new AbortController()
-    oauthAbortRef.current = controller
-    const { signal } = controller
-
-    setOauthStatus('starting')
-    setOauthMessage(`Starting ${provider.name} OAuth...`)
-    setOauthUserCode('')
-    setOauthVerificationUri('')
-
-    try {
-      const codeRes = await fetch('/api/oauth/device-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: provider.id }),
-        signal,
-      })
-      const codeData = (await codeRes.json()) as OAuthDeviceCodeResponse
-      if (!codeRes.ok || codeData.error || !codeData.device_code) {
-        throw new Error(codeData.error || 'Could not start OAuth device flow')
-      }
-
-      const verificationUri = codeData.verification_uri_complete || ''
-      setOauthStatus('pending')
-      setOauthUserCode(codeData.user_code || '')
-      setOauthVerificationUri(verificationUri)
-      setOauthMessage(
-        verificationUri
-          ? `Authorize ${provider.name} in the browser, then return here.`
-          : `Enter the user code to authorize ${provider.name}.`,
-      )
-
-      if (verificationUri) {
-        window.open(verificationUri, '_blank', 'noopener,noreferrer')
-      }
-
-      const expiresInSeconds = codeData.expires_in || DEFAULT_OAUTH_EXPIRES_SECONDS
-      const intervalSeconds = Math.max(
-        1,
-        codeData.interval || DEFAULT_OAUTH_POLL_INTERVAL_SECONDS,
-      )
-      const deadline = Date.now() + expiresInSeconds * 1000
-      const intervalMs = intervalSeconds * 1000
-
-      while (Date.now() < deadline) {
-        await sleepUnlessAborted(intervalMs, signal)
-        const pollRes = await fetch('/api/oauth/poll-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            provider: provider.id,
-            deviceCode: codeData.device_code,
-          }),
-          signal,
-        })
-        const pollData = (await pollRes.json()) as OAuthPollResponse
-        if (pollData.status === 'pending') continue
-        if (pollData.status === 'success') {
-          setOauthStatus('success')
-          setOauthMessage(
-            `${provider.name} OAuth is connected. TUI and WebUI will use the shared Hermes credentials.`,
-          )
-          await refreshConfig()
-          return
-        }
-        throw new Error(pollData.message || 'OAuth authorization failed')
-      }
-
-      throw new Error('OAuth authorization timed out')
-    } catch (error) {
-      if ((error as { name?: string })?.name === 'AbortError') return
-      setOauthStatus('error')
-      setOauthMessage(
-        error instanceof Error ? error.message : 'OAuth authorization failed',
-      )
-    } finally {
-      if (oauthAbortRef.current === controller) {
-        oauthAbortRef.current = null
-      }
+    if (model) {
+      setActiveModel(model)
+      save({ config: { model, provider: providerId } })
+    } else {
+      // Switching provider without a model — fetch models and pick the first one
+      fetchModelsForProvider(providerId)
+      save({ config: { provider: providerId } })
     }
   }
 
@@ -652,78 +397,43 @@ function HermesContent() {
         </p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {PROVIDER_CARDS.map((p) => {
-            const isActive =
-              (oauthProviderId || localProviderId || activeProvider) === p.id
-            const localOnline =
-              localDiscovery?.providers.find((lp) => lp.id === p.id)?.online ===
-              true
-            // verified = truly available right now. OAuth status isn't tracked
-            // here, so OAuth providers stay neutral until an actual session
-            // check is wired. Local providers require live discovery hit.
-            const verified =
-              (p.authType === 'none' && localOnline) ||
-              (p.authType === 'api_key' &&
-                !!p.envKey &&
-                !!configuredKeys[p.envKey])
-            const missingKey =
-              p.authType === 'api_key' && !verified && p.id !== 'custom'
-            // hasKey gates click — keep OAuth + local clickable (existing
-            // behaviour) so users can still authenticate via the card.
+            const isActive = activeProvider === p.id
             const hasKey =
               p.authType === 'none' ||
               p.authType === 'oauth' ||
-              verified ||
-              p.id === 'custom'
+              (p.envKey ? !!configuredKeys[p.envKey] : false)
             return (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => {
-                  const action = getProviderClickAction({
-                    providerId: p.id,
-                    authType: p.authType,
-                    hasKey,
-                  })
-                  if (action === 'oauth') {
-                    resetOAuthState(p.id)
-                    return
-                  }
-                  if (action === 'local') {
-                    showLocalProviderSetup(p.id)
-                    return
-                  }
-                  if (action === 'custom') {
-                    showCustomProviderSetup()
-                    return
-                  }
-                  if (action === 'select') selectProvider(p.id)
+                  if (hasKey) selectProvider(p.id)
                 }}
                 className={cn(
                   'flex flex-col items-start gap-1 rounded-xl px-3 py-2.5 text-left transition-all',
                   isActive
                     ? 'ring-2 ring-accent-500 shadow-md'
                     : 'hover:brightness-110',
-                  missingKey && 'opacity-60',
+                  !hasKey && p.authType === 'api_key' && 'opacity-60',
                 )}
                 style={cardStyle}
               >
                 <div className="flex w-full items-center justify-between">
                   <ProviderLogo provider={p.id} size={32} />
-                  {/* Single-dot precedence: active > missing-key > verified > none */}
-                  {isActive ? (
+                  {isActive && (
                     <span className="size-2 rounded-full bg-green-500" />
-                  ) : missingKey ? (
-                    <span className="size-2 rounded-full bg-red-500/60" />
-                  ) : verified ? (
+                  )}
+                  {!isActive && hasKey && (
                     <span className="size-2 rounded-full bg-green-500/40" />
-                  ) : null}
+                  )}
+                  {!hasKey && p.authType === 'api_key' && (
+                    <span className="size-2 rounded-full bg-red-500/60" />
+                  )}
                 </div>
                 <span className="text-xs font-semibold mt-1">{p.name}</span>
                 <span className="text-[9px]" style={mutedStyle}>
                   {(() => {
-                    const disc = localDiscovery?.providers.find(
-                      (lp) => lp.id === p.id,
-                    )
+                    const disc = localDiscovery?.providers.find((lp) => lp.id === p.id)
                     if (disc?.online) return '🟢 Detected'
                     if (p.authType === 'oauth') return 'OAuth'
                     if (p.authType === 'none') return 'Local'
@@ -736,165 +446,14 @@ function HermesContent() {
         </div>
       </div>
 
-      {oauthProviderId ? (
-        <div className="rounded-xl px-3 py-2.5" style={cardStyle}>
-          {(() => {
-            const provider = PROVIDER_CARDS.find((p) => p.id === oauthProviderId)
-            if (!provider) return null
-
-            return (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{provider.name} OAuth</p>
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={oauthStatus === 'starting' || oauthStatus === 'pending'}
-                    onClick={() => {
-                      void startOAuthFlow()
-                    }}
-                  >
-                    {getOAuthStartButtonLabel(oauthStatus)}
-                  </Button>
-                </div>
-
-                <div className="rounded-lg border border-primary-200 bg-primary-50/80 px-3 py-2 text-xs text-primary-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-                  {oauthMessage || 'Start the browser-based OAuth flow.'}
-                  {oauthUserCode ? (
-                    <div className="mt-2">
-                      User code:{' '}
-                      <code className="rounded bg-black/10 px-1 py-0.5 font-mono dark:bg-white/10">
-                        {oauthUserCode}
-                      </code>
-                    </div>
-                  ) : null}
-                  {oauthVerificationUri ? (
-                    <a
-                      href={oauthVerificationUri}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 inline-block font-medium underline underline-offset-2"
-                    >
-                      Open authorization page
-                    </a>
-                  ) : null}
-                </div>
-              </div>
-            )
-          })()}
-        </div>
-      ) : null}
-
-      {localProviderId ? (
-        <div className="rounded-xl px-3 py-2.5" style={cardStyle}>
-          {(() => {
-            const provider = PROVIDER_CARDS.find((p) => p.id === localProviderId)
-            if (!provider) return null
-            const disc = localDiscovery?.providers.find(
-              (lp) => lp.id === provider.id,
-            )
-            const models =
-              localDiscovery?.models.filter((m) => m.provider === provider.id) ||
-              []
-            const setup = LOCAL_PROVIDER_SETUP[provider.id] || {
-              baseUrl: 'local OpenAI-compatible endpoint',
-              unavailableMessage: 'No local endpoint detected.',
-            }
-
-            return (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{provider.name}</p>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-primary-200 bg-primary-50/80 px-3 py-2 text-xs text-primary-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-                  {disc?.online ? (
-                    <>
-                      Detected {disc.modelCount} model
-                      {disc.modelCount === 1 ? '' : 's'} at{' '}
-                      <code className="rounded bg-black/10 px-1 py-0.5 font-mono dark:bg-white/10">
-                        {setup.baseUrl}
-                      </code>
-                      .
-                    </>
-                  ) : (
-                    setup.unavailableMessage
-                  )}
-                  {disc?.needsRestart ? (
-                    <div className="mt-2 text-yellow-700 dark:text-yellow-200">
-                      Gateway restart may be needed after adding this provider to
-                      config.
-                    </div>
-                  ) : null}
-                </div>
-
-                {models.length > 0 ? (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider" style={mutedStyle}>
-                      Detected Models
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {models.map((model) => (
-                        <button
-                          key={model.id}
-                          type="button"
-                          aria-pressed={
-                            activeProvider === provider.id &&
-                            activeModel === model.id
-                          }
-                          onClick={() => {
-                            setActiveProvider(provider.id)
-                            setActiveModel(model.id)
-                          }}
-                          className={cn(
-                            'rounded-lg px-3 py-1.5 text-xs font-medium transition-all hover:brightness-110',
-                            activeProvider === provider.id &&
-                              activeModel === model.id
-                              ? 'ring-2 ring-accent-500'
-                              : '',
-                          )}
-                          style={cardStyle}
-                        >
-                          {model.id}
-                          {defaultProvider === provider.id &&
-                          defaultModelId === model.id
-                            ? ' · default'
-                            : ''}
-                        </button>
-                      ))}
-                    </div>
-                    {activeProvider === provider.id &&
-                    activeModel &&
-                    (defaultProvider !== provider.id ||
-                      activeModel !== defaultModelId) ? (
-                      <div className="mt-2 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => setDefaultModel(provider.id, activeModel)}
-                        >
-                          Set as default: {provider.id} · {activeModel}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            )
-          })()}
-        </div>
-      ) : null}
-
       {/* Model Selection for active provider */}
-      {!oauthProviderId && !localProviderId && activeProvider && activeProvider !== 'custom' && (
+      {activeProvider && (
         <div>
           <p
             className="mb-1 text-xs font-semibold uppercase tracking-wider"
             style={mutedStyle}
           >
-            Model — pick one, then confirm below
+            Model
           </p>
           <div className="flex flex-wrap gap-2">
             {(() => {
@@ -904,191 +463,33 @@ function HermesContent() {
                 .filter((m) => m.provider === activeProvider)
                 .map((m) => m.id)
               if (discovered && discovered.length > 0) return discovered
-              return (
-                PROVIDER_CARDS.find((p) => p.id === activeProvider)?.models ||
-                []
-              )
+              return PROVIDER_CARDS.find((p) => p.id === activeProvider)?.models || []
             })().map((model) => (
               <button
                 key={model}
                 type="button"
-                aria-pressed={activeModel === model}
-                onClick={() => setActiveModel(model)}
+                onClick={() => selectProvider(activeProvider, model)}
                 className={cn(
                   'rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
                   activeModel === model
                     ? 'ring-2 ring-accent-500'
                     : 'hover:brightness-110',
-                  defaultProvider === activeProvider && defaultModelId === model
-                    ? 'border border-accent-500/40'
-                    : '',
                 )}
                 style={cardStyle}
               >
                 {model}
-                {defaultProvider === activeProvider && defaultModelId === model
-                  ? ' · default'
-                  : ''}
               </button>
             ))}
           </div>
-          {activeModel &&
-          (activeProvider !== defaultProvider || activeModel !== defaultModelId) ? (
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => setDefaultModel(activeProvider, activeModel)}
-              >
-                Set as default: {activeProvider} · {activeModel}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      {/* Custom OpenAI-compatible endpoint fields — Base URL only; API key lives in API Keys section */}
-      {activeProvider === 'custom' && (
-        <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wider" style={mutedStyle}>
-            Custom Endpoint
-          </p>
-          <div className="space-y-1.5">
-            {(() => {
-              const isEditing = editingKey === 'custom_base_url'
-              const hasValue = !!customBaseUrl
-              return (
-                <div className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={cardStyle}>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium">Base URL</div>
-                    <div className="text-[11px] font-mono" style={mutedStyle}>
-                      {isEditing ? (
-                        <input
-                          type="url"
-                          value={customBaseUrl}
-                          onChange={(e) => setCustomBaseUrl(e.target.value)}
-                          placeholder="http://127.0.0.1:38238/v1"
-                          className="w-full rounded border-0 bg-transparent py-0.5 text-[11px] outline-none"
-                          style={{ color: 'var(--theme-text)' }}
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              save({ config: { model: { provider: 'manifest' }, providers: { manifest: { type: 'openai', base_url: customBaseUrl, key_env: 'CUSTOM_API_KEY' } } } })
-                                .then(() => setEditingKey(null))
-                            }
-                            if (e.key === 'Escape') setEditingKey(null)
-                          }}
-                        />
-                      ) : hasValue ? customBaseUrl : 'Not configured'}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={cn('size-2 rounded-full', hasValue ? 'bg-green-500' : 'bg-neutral-500')} />
-                    {isEditing ? (
-                      <>
-                        <button type="button" onClick={() => { save({ config: { model: { provider: 'manifest' }, providers: { manifest: { type: 'openai', base_url: customBaseUrl, key_env: 'CUSTOM_API_KEY' } } } }).then(() => setEditingKey(null)) }} className="text-xs font-medium text-green-400">Save</button>
-                        <button type="button" onClick={() => setEditingKey(null)} className="text-xs" style={mutedStyle}>Cancel</button>
-                      </>
-                    ) : (
-                      <button type="button" onClick={() => setEditingKey('custom_base_url')} className="text-xs font-medium" style={{ color: 'var(--theme-accent)' }}>
-                        {hasValue ? 'Edit' : 'Add'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })()}
-            {(() => {
-              const isEditing = editingKey === 'custom_model'
-              const hasValue = !!customModel
-              return (
-                <div
-                  className="flex items-center gap-3 rounded-xl px-3 py-2.5"
-                  style={cardStyle}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium">Model</div>
-                    <div
-                      className="text-[11px] font-mono"
-                      style={mutedStyle}
-                    >
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          value={customModel}
-                          onChange={(e) => setCustomModel(e.target.value)}
-                          placeholder="e.g. gpt-4o-mini, llama3:8b"
-                          className="w-full rounded border-0 bg-transparent py-0.5 text-[11px] outline-none"
-                          style={{ color: 'var(--theme-text)' }}
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') setEditingKey(null)
-                            if (e.key === 'Escape') setEditingKey(null)
-                          }}
-                        />
-                      ) : hasValue ? (
-                        customModel
-                      ) : (
-                        'Not configured'
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        'size-2 rounded-full',
-                        hasValue ? 'bg-green-500' : 'bg-neutral-500',
-                      )}
-                    />
-                    {isEditing ? (
-                      <button
-                        type="button"
-                        onClick={() => setEditingKey(null)}
-                        className="text-xs font-medium text-green-400"
-                      >
-                        Done
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setEditingKey('custom_model')}
-                        className="text-xs font-medium"
-                        style={{ color: 'var(--theme-accent)' }}
-                      >
-                        {hasValue ? 'Edit' : 'Add'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })()}
-          </div>
-          {customBaseUrl &&
-          customModel &&
-          (defaultProvider !== 'custom' || customModel !== defaultModelId) ? (
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => setDefaultModel('custom', customModel)}
-              >
-                Set as default: custom · {customModel}
-              </Button>
-            </div>
-          ) : null}
         </div>
       )}
 
       {(() => {
-        const disc = localDiscovery?.providers.find(
-          (lp) => lp.id === activeProvider,
-        )
+        const disc = localDiscovery?.providers.find((lp) => lp.id === activeProvider)
         if (!disc || !disc.needsRestart) return null
         return (
           <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
-            ⚠️ Gateway restart needed to use {disc.name}. Run{' '}
-            <code className="rounded bg-black/30 px-1">
-              hermes gateway restart
-            </code>{' '}
-            in your terminal.
+            ⚠️ Gateway restart needed to use {disc.name}. Run <code className="rounded bg-black/30 px-1">hermes gateway restart</code> in your terminal.
           </div>
         )
       })()}
@@ -1440,7 +841,7 @@ function AppearanceContent() {
   }
 
   function _handleAccentColorChange(selectedAccent: AccentColor) {
-    localStorage.setItem('claude-accent', selectedAccent)
+    localStorage.setItem('hermes-accent', selectedAccent)
     document.documentElement.setAttribute('data-accent', selectedAccent)
     applyAccentColor(selectedAccent)
     updateSettings({ accentColor: selectedAccent })
@@ -1489,7 +890,7 @@ function AppearanceContent() {
       <div className={SETTINGS_CARD_CLASS}>
         <Row
           label="System metrics footer"
-          description="Show a persistent footer with CPU, RAM, disk, and Hermes Agent status."
+          description="Show a persistent footer with CPU, RAM, disk, and Hermes status."
         >
           <Switch
             checked={settings.showSystemMetricsFooter}
@@ -1507,18 +908,17 @@ function AppearanceContent() {
 }
 
 const ENTERPRISE_THEME_FAMILIES: Array<ThemeId> = [
-  'claude-nous',
-  'matrix',
-  'claude-official',
-  'claude-classic',
-  'claude-slate',
+  'hermes-nous',
+  'hermes-official',
+  'hermes-classic',
+  'hermes-slate',
 ]
 
 const ENTERPRISE_THEMES = THEMES.map((theme) => ({
   ...theme,
   desc: theme.description,
   preview:
-    theme.id === 'claude-nous'
+    theme.id === 'hermes-nous'
       ? {
           bg: '#041C1C',
           panel: '#06282A',
@@ -1526,7 +926,7 @@ const ENTERPRISE_THEMES = THEMES.map((theme) => ({
           accent: '#FFAC02',
           text: '#FFE6CB',
         }
-      : theme.id === 'claude-nous-light'
+      : theme.id === 'hermes-nous-light'
         ? {
             bg: '#F8FAF8',
             panel: '#FBFDFB',
@@ -1534,69 +934,53 @@ const ENTERPRISE_THEMES = THEMES.map((theme) => ({
             accent: '#2557B7',
             text: '#16315F',
           }
-        : theme.id === 'matrix'
+      : theme.id === 'hermes-official'
+      ? {
+          bg: '#0A0E1A',
+          panel: '#11182A',
+          border: '#24304A',
+          accent: '#6366F1',
+          text: '#E6EAF2',
+        }
+      : theme.id === 'hermes-official-light'
+        ? {
+            bg: '#F7F7F1',
+            panel: '#FAFBF6',
+            border: '#CDD5DA',
+            accent: '#2557B7',
+            text: '#16315F',
+          }
+        : theme.id === 'hermes-classic'
           ? {
-              bg: '#020804',
-              panel: '#07130A',
-              border: 'rgba(0,255,65,0.28)',
-              accent: '#00FF41',
-              text: '#D8FFE3',
+              bg: '#0d0f12',
+              panel: '#1a1f26',
+              border: '#2a313b',
+              accent: '#b98a44',
+              text: '#eceff4',
             }
-          : theme.id === 'matrix-light'
+          : theme.id === 'hermes-classic-light'
             ? {
-                bg: '#F4FFF6',
-                panel: '#FFFFFF',
-                border: 'rgba(0,126,34,0.2)',
-                accent: '#008F2D',
-                text: '#062A12',
+                bg: '#F5F2ED',
+                panel: '#FCFAF7',
+                border: '#D8CCBC',
+                accent: '#b98a44',
+                text: '#1a1f26',
               }
-            : theme.id === 'claude-official'
+            : theme.id === 'hermes-slate'
               ? {
-                  bg: '#0A0E1A',
-                  panel: '#11182A',
-                  border: '#24304A',
-                  accent: '#6366F1',
-                  text: '#E6EAF2',
+                  bg: '#0d1117',
+                  panel: '#1c2128',
+                  border: '#30363d',
+                  accent: '#7eb8f6',
+                  text: '#c9d1d9',
                 }
-              : theme.id === 'claude-official-light'
-                ? {
-                    bg: '#F7F7F1',
-                    panel: '#FAFBF6',
-                    border: '#CDD5DA',
-                    accent: '#2557B7',
-                    text: '#16315F',
-                  }
-                : theme.id === 'claude-classic'
-              ? {
-                  bg: '#0d0f12',
-                  panel: '#1a1f26',
-                  border: '#2a313b',
-                  accent: '#b98a44',
-                  text: '#eceff4',
-                }
-              : theme.id === 'claude-classic-light'
-                ? {
-                    bg: '#F5F2ED',
-                    panel: '#FCFAF7',
-                    border: '#D8CCBC',
-                    accent: '#b98a44',
-                    text: '#1a1f26',
-                  }
-                : theme.id === 'claude-slate'
-                  ? {
-                      bg: '#0d1117',
-                      panel: '#1c2128',
-                      border: '#30363d',
-                      accent: '#7eb8f6',
-                      text: '#c9d1d9',
-                    }
-                  : {
-                      bg: '#F6F8FA',
-                      panel: '#FFFFFF',
-                      border: '#D0D7DE',
-                      accent: '#3b82f6',
-                      text: '#24292f',
-                    },
+              : {
+                  bg: '#F6F8FA',
+                  panel: '#FFFFFF',
+                  border: '#D0D7DE',
+                  accent: '#3b82f6',
+                  text: '#24292f',
+                },
 }))
 
 function ThemeSwatch({
@@ -1642,7 +1026,7 @@ function ThemeSwatch({
 function EnterpriseThemePicker() {
   const { updateSettings } = useSettings()
   const [current, setCurrent] = useState(() => {
-    if (typeof window === 'undefined') return 'claude-nous'
+    if (typeof window === 'undefined') return 'hermes-nous'
     return getTheme()
   })
   const currentMode = isDarkTheme(current) ? 'dark' : 'light'
@@ -1740,7 +1124,7 @@ function _LoaderContent() {
   const { settings: cs, updateSettings: updateCS } = useChatSettingsStore()
   const styles: Array<{ value: LoaderStyle; label: string }> = [
     { value: 'dots', label: 'Dots' },
-    { value: 'braille-claude', label: 'Hermes' },
+    { value: 'braille-hermes', label: 'Braille' },
     { value: 'braille-orbit', label: 'Orbit' },
     { value: 'braille-breathe', label: 'Breathe' },
     { value: 'braille-pulse', label: 'Pulse' },
@@ -1750,7 +1134,7 @@ function _LoaderContent() {
   ]
   function getPreset(s: LoaderStyle): BrailleSpinnerPreset | null {
     const m: Record<string, BrailleSpinnerPreset> = {
-      'braille-claude': 'claude',
+      'braille-hermes': 'hermes',
       'braille-orbit': 'orbit',
       'braille-breathe': 'breathe',
       'braille-pulse': 'pulse',
@@ -1834,65 +1218,6 @@ function ChatContent() {
             aria-label="Show reasoning blocks"
           />
         </Row>
-        <Row
-          label="Sound on response complete"
-          description="Play a short sound in the browser when the agent finishes replying."
-        >
-          <Switch
-            checked={cs.soundOnChatComplete}
-            onCheckedChange={(c) => updateCS({ soundOnChatComplete: c })}
-            aria-label="Sound on response complete"
-          />
-        </Row>
-        <Row
-          label="Enter key behavior"
-          description={
-            cs.enterBehavior === 'newline'
-              ? 'Enter inserts a newline. Use ⌘/Ctrl+Enter to send.'
-              : 'Enter sends the message. Use Shift+Enter for a newline.'
-          }
-        >
-          <Switch
-            checked={cs.enterBehavior === 'newline'}
-            onCheckedChange={(c) =>
-              updateCS({ enterBehavior: c ? 'newline' : 'send' })
-            }
-            aria-label="Enter inserts newline instead of sending"
-          />
-        </Row>
-        <Row
-          label="Chat content width"
-          description="Max-width of the message column on wide screens."
-        >
-          <select
-            value={cs.chatWidth}
-            onChange={(e) =>
-              updateCS({
-                chatWidth: e.target.value as 'comfortable' | 'wide' | 'full',
-              })
-            }
-            className="h-8 rounded-md border border-primary-200 bg-primary-50 px-2 text-sm text-primary-900 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-400"
-            aria-label="Chat content width"
-          >
-            <option value="comfortable">Comfortable (900px)</option>
-            <option value="wide">Wide (1200px)</option>
-            <option value="full">Full width</option>
-          </select>
-        </Row>
-        <Row
-          label="Expand sidebar on hover"
-          description={
-            cs.sidebarHoverExpand
-              ? 'Collapsed sidebar expands temporarily on hover.'
-              : 'Collapsed sidebar stays at 48px until you click the toggle.'
-          }
-        >
-          <Switch
-            checked={cs.sidebarHoverExpand}
-            onCheckedChange={(c) => updateCS({ sidebarHoverExpand: c })}
-            aria-label="Expand sidebar on hover"
-          />
-        </Row>
       </div>
       {/* Loading animation removed — not relevant for Hermes */}
     </div>
@@ -1960,7 +1285,7 @@ function _AdvancedContent() {
     } else {
       setUrlError(null)
     }
-    updateSettings({ claudeUrl: value })
+    updateSettings({ hermesUrl: value })
   }
 
   async function testConnection() {
@@ -1974,27 +1299,24 @@ function _AdvancedContent() {
     }
   }
 
-  const urlErrorId = 'claude-url-error'
+  const urlErrorId = 'hermes-url-error'
 
   return (
     <div className="space-y-4">
       <SectionHeader
         title="Advanced"
-        description="Hermes Agent endpoint and connectivity."
+        description="Hermes endpoint and connectivity."
       />
       <div className={SETTINGS_CARD_CLASS}>
-        <Row
-          label="Hermes Agent URL"
-          description="Used for API requests from Studio"
-        >
+        <Row label="Hermes URL" description="Used for API requests from Studio">
           <div className="w-full max-w-sm">
             <Input
               type="url"
-              placeholder="https://api.claudeworkspace.app"
-              value={settings.claudeUrl}
+              placeholder="https://api.hermesworkspace.app"
+              value={settings.hermesUrl}
               onChange={(e) => validateAndUpdateUrl(e.target.value)}
               className="h-8 w-full rounded-lg border-primary-200 text-sm"
-              aria-label="Hermes Agent URL"
+              aria-label="Hermes URL"
               aria-invalid={!!urlError}
               aria-describedby={urlError ? urlErrorId : undefined}
             />
@@ -2174,6 +1496,118 @@ function AgentBehaviorContent() {
   )
 }
 
+// ── Smart Routing ───────────────────────────────────────────────────────
+
+function SmartRoutingContent() {
+  const [config, setConfig] = useState<Record<string, unknown>>({})
+  const [models, setModels] = useState<Array<{ id: string; name?: string }>>([])
+  const [msg, setMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/hermes-config')
+      .then((r) => r.json())
+      .then((d: any) => {
+        setConfig(
+          (d.config?.smart_model_routing as Record<string, unknown>) || {},
+        )
+      })
+      .catch(() => {})
+    fetch('/api/models')
+      .then((r) => r.json())
+      .then((d: any) => {
+        setModels(d.models || [])
+      })
+      .catch(() => {})
+  }, [])
+
+  const save = async (key: string, value: unknown) => {
+    setMsg(null)
+    try {
+      await fetch('/api/hermes-config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: { smart_model_routing: { [key]: value } },
+        }),
+      })
+      setConfig((prev) => ({ ...prev, [key]: value }))
+      setMsg('Saved')
+      setTimeout(() => setMsg(null), 2000)
+    } catch {
+      setMsg('Failed')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader
+        title="Smart Routing"
+        description="Route simple queries to cheaper models."
+      />
+      {msg && (
+        <div
+          className={cn(
+            'rounded-lg px-3 py-1.5 text-xs font-medium',
+            msg === 'Saved'
+              ? 'bg-green-500/15 text-green-400'
+              : 'bg-red-500/15 text-red-400',
+          )}
+        >
+          {msg}
+        </div>
+      )}
+      <div className={SETTINGS_CARD_CLASS}>
+        <Row
+          label="Enable smart routing"
+          description="Auto-route simple queries"
+        >
+          <Switch
+            checked={config.enabled !== false}
+            onCheckedChange={(c) => save('enabled', c)}
+          />
+        </Row>
+        <Row label="Cheap model" description="Model for simple queries">
+          <select
+            value={String(config.cheap_model || '')}
+            onChange={(e) => save('cheap_model', e.target.value)}
+            className="h-8 max-w-[12rem] rounded-lg border border-primary-200 bg-primary-50 px-2 text-sm text-primary-900 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+          >
+            <option value="">Auto</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name || m.id}
+              </option>
+            ))}
+          </select>
+        </Row>
+        <Row label="Max chars" description="Messages shorter use cheap model">
+          <input
+            type="number"
+            min={10}
+            max={2000}
+            value={Number(config.max_simple_chars) || 200}
+            onChange={(e) => save('max_simple_chars', Number(e.target.value))}
+            className="h-8 w-20 rounded-lg border border-primary-200 bg-primary-50 px-2 text-sm text-center text-primary-900 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+          />
+        </Row>
+        <Row
+          label="Max words"
+          description="Messages with fewer words use cheap model"
+        >
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={Number(config.max_simple_words) || 30}
+            onChange={(e) => save('max_simple_words', Number(e.target.value))}
+            className="h-8 w-20 rounded-lg border border-primary-200 bg-primary-50 px-2 text-sm text-center text-primary-900 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+          />
+        </Row>
+      </div>
+    </div>
+  )
+}
+
 // ── Voice (TTS + STT) ──────────────────────────────────────────────────
 
 function VoiceContent() {
@@ -2224,9 +1658,6 @@ function VoiceContent() {
   }
 
   const ttsProvider = String(tts.provider || 'edge')
-  const sttProvider = String(stt.provider || 'local')
-  const sttGroq =
-    (stt.groq as Record<string, unknown> | undefined) || {}
 
   return (
     <div className="space-y-4">
@@ -2299,47 +1730,14 @@ function VoiceContent() {
         </Row>
         <Row label="STT Provider">
           <select
-            value={sttProvider}
+            value={String(stt.provider || 'local')}
             onChange={(e) => saveStt('provider', e.target.value)}
             className="h-8 rounded-lg border border-primary-200 bg-primary-50 px-2 text-sm text-primary-900 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
           >
-            {STT_PROVIDER_OPTIONS.map((provider) => (
-              <option key={provider.value} value={provider.value}>
-                {provider.label}
-              </option>
-            ))}
+            <option value="local">Local (Whisper)</option>
+            <option value="openai">OpenAI Whisper</option>
           </select>
         </Row>
-        {sttProvider === 'groq' && (
-          <>
-            <Row label="Groq model">
-              <select
-                value={String(sttGroq.model || GROQ_STT_MODELS[0])}
-                onChange={(e) =>
-                  saveStt('groq', {
-                    ...sttGroq,
-                    model: e.target.value,
-                  })
-                }
-                className="h-8 rounded-lg border border-primary-200 bg-primary-50 px-2 text-sm text-primary-900 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-              >
-                {GROQ_STT_MODELS.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Language" description="Optional BCP-47 code, e.g. en or en-US.">
-              <Input
-                value={String(stt.language || '')}
-                onChange={(e) => saveStt('language', e.target.value)}
-                placeholder="auto"
-                className="h-8 w-40"
-              />
-            </Row>
-          </>
-        )}
       </div>
     </div>
   )
@@ -2439,32 +1837,29 @@ function DisplayContent() {
   )
 }
 
+// ── Language ────────────────────────────────────────────────────────────
+
+import { getLocale, setLocale, LOCALE_LABELS, type LocaleId, useLocale } from '@/lib/i18n'
+
 function LanguageContent() {
+  const { locale } = useLocale()
   return (
     <div className="space-y-4">
       <SectionHeader
         title="Language"
         description="Choose the display language for the workspace UI."
       />
-      <Row
-        label="Interface Language"
-        description="Translates navigation, labels, and buttons."
-      >
+      <Row label="Interface Language" description="Translates navigation, labels, and buttons.">
         <select
-          value={getLocale()}
+          value={locale}
           onChange={(e) => {
             setLocale(e.target.value as LocaleId)
-            window.location.reload()
           }}
           className="h-9 w-full rounded-lg border border-primary-200 dark:border-neutral-700 bg-primary-50 dark:bg-neutral-800 px-3 text-sm text-primary-900 dark:text-neutral-100 outline-none md:max-w-xs"
         >
-          {(Object.entries(LOCALE_LABELS) as Array<[LocaleId, string]>).map(
-            ([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ),
-          )}
+          {(Object.entries(LOCALE_LABELS) as Array<[LocaleId, string]>).map(([id, label]) => (
+            <option key={id} value={id}>{label}</option>
+          ))}
         </select>
       </Row>
     </div>
@@ -2474,8 +1869,9 @@ function LanguageContent() {
 // ── Main Dialog ─────────────────────────────────────────────────────────
 
 const CONTENT_MAP: Record<SectionId, () => React.JSX.Element> = {
-  claude: HermesContent,
+  hermes: HermesContent,
   agent: AgentBehaviorContent,
+  routing: SmartRoutingContent,
   voice: VoiceContent,
   display: DisplayContent,
   appearance: AppearanceContent,
@@ -2493,7 +1889,7 @@ type SettingsDialogProps = {
 export function SettingsDialog({
   open,
   onOpenChange,
-  initialSection = 'claude',
+  initialSection = 'hermes',
 }: SettingsDialogProps) {
   const [active, setActive] = useState<SectionId>(initialSection)
   const [mobileView, setMobileView] = useState<'nav' | 'content'>('nav')
@@ -2600,7 +1996,7 @@ export function SettingsDialog({
           </SettingsErrorBoundary>
 
           <div className="sticky bottom-0 z-10 border-t border-primary-200 bg-primary-50/60 px-4 py-3 text-xs text-primary-500 dark:text-neutral-400 md:rounded-b-2xl md:px-5">
-            Most changes save automatically; the default model commits only when you click Set as default.{' '}
+            Changes saved automatically.{' '}
             <a
               href="/settings"
               className="ml-2 font-medium underline underline-offset-2 hover:text-primary-700 dark:hover:text-neutral-200"

@@ -1,13 +1,6 @@
 import { HugeiconsIcon } from '@hugeicons/react'
 import { BrainIcon, CodeIcon, PuzzleIcon } from '@hugeicons/core-free-icons'
 import { motion } from 'motion/react'
-import { useEffect, useState } from 'react'
-
-type ProfileSummary = {
-  name: string
-  model?: string
-  active?: boolean
-}
 
 type SuggestionChip = {
   label: string
@@ -44,21 +37,6 @@ export function ChatEmptyState({
   onSuggestionClick,
   compact = false,
 }: ChatEmptyStateProps) {
-  const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null)
-
-  useEffect(() => {
-    fetch('/api/profiles/list')
-      .then((res) => res.json())
-      .then((data) => {
-        const profiles = data?.profiles as Array<ProfileSummary> | undefined
-        const active = profiles?.find((p) => p.active)
-        if (active) setActiveProfile(active)
-      })
-      .catch(() => {
-        // silently ignore — profile info is cosmetic
-      })
-  }, [])
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -70,8 +48,8 @@ export function ChatEmptyState({
         {/* Avatar in editorial frame, no glow — architectural restraint */}
         <div className="relative mb-6">
           <img
-            src="/claude-avatar.webp"
-            alt="Hermes Agent"
+            src="/hermes-avatar.webp"
+            alt="munr"
             className="relative size-20 rounded-md"
             style={{
               border: '1px solid var(--theme-border)',
@@ -96,13 +74,6 @@ export function ChatEmptyState({
         >
           Begin a session
         </h2>
-
-        {activeProfile && (
-          <span className="mt-2 text-xs" style={{ color: 'var(--theme-accent)' }}>
-            {activeProfile.name}
-            {activeProfile.model ? ` · ${activeProfile.model}` : ''}
-          </span>
-        )}
 
         {!compact && (
           <>

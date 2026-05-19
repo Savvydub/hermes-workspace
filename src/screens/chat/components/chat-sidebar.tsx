@@ -4,30 +4,28 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   BrainIcon,
-  Building01Icon,
-  Castle02Icon,
   Chat01Icon,
   CheckListIcon,
   Clock01Icon,
   ComputerTerminal01Icon,
   DashboardSquare01Icon,
   File01Icon,
-  McpServerIcon,
   MessageMultiple01Icon,
   Moon02Icon,
   PencilEdit02Icon,
   PuzzleIcon,
+
   Rocket01Icon,
-  Search01Icon,
-  Settings01Icon,
-  Sun02Icon,
-  UserGroupIcon,
-  UserMultipleIcon,
+  Search01Icon, Settings01Icon, Sun02Icon, UserGroupIcon, UserMultipleIcon
 } from '@hugeicons/core-free-icons'
 import { AnimatePresence, motion } from 'motion/react'
+import { useLocale } from '@/lib/i18n'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CHAT_OPEN_SETTINGS_EVENT } from '../chat-events'
+import {
+  CHAT_OPEN_SETTINGS_EVENT
+  
+} from '../chat-events'
 import { useChatSettings as useSidebarSettings } from '../hooks/use-chat-settings'
 import { useDeleteSession } from '../hooks/use-delete-session'
 import { useRenameSession } from '../hooks/use-rename-session'
@@ -35,9 +33,8 @@ import { ProvidersDialog } from './providers-dialog'
 import { SessionRenameDialog } from './sidebar/session-rename-dialog'
 import { SessionDeleteDialog } from './sidebar/session-delete-dialog'
 import { SidebarSessions } from './sidebar/sidebar-sessions'
-import type { ChatOpenSettingsDetail } from '../chat-events'
+import type {ChatOpenSettingsDetail} from '../chat-events';
 import type { SessionMeta } from '../types'
-import { t } from '@/lib/i18n'
 import { SettingsDialog } from '@/components/settings-dialog'
 import {
   TooltipContent,
@@ -52,7 +49,6 @@ import { SEARCH_MODAL_EVENTS, useSearchModal } from '@/hooks/use-search-modal'
 import {
   selectChatProfileAvatarDataUrl,
   selectChatProfileDisplayName,
-  selectSidebarHoverExpand,
   useChatSettingsStore,
 } from '@/hooks/use-chat-settings'
 import { StatusDot } from '@/components/status-indicator'
@@ -71,34 +67,29 @@ function ThemeToggleMini() {
   const updateSettings = useSettingsStore((state) => state.updateSettings)
   void _theme
   // Detect dark/light from actual data-theme attribute
-  const currentDataTheme =
-    typeof document !== 'undefined'
-      ? document.documentElement.getAttribute('data-theme') || 'claude-nous'
-      : 'claude-nous'
+  const currentDataTheme = typeof document !== 'undefined'
+    ? document.documentElement.getAttribute('data-theme') || 'hermes-nous'
+    : 'hermes-nous'
   const isDark = !currentDataTheme.endsWith('-light')
 
   // Map between dark and light counterparts — must include all theme families
   const LIGHT_DARK_PAIRS: Record<string, string> = {
-    'claude-nous': 'claude-nous-light',
-    'claude-nous-light': 'claude-nous',
-    'claude-official': 'claude-official-light',
-    'claude-official-light': 'claude-official',
-    'claude-classic': 'claude-classic-light',
-    'claude-classic-light': 'claude-classic',
-    'claude-slate': 'claude-slate-light',
-    'claude-slate-light': 'claude-slate',
+    'hermes-nous': 'hermes-nous-light',
+    'hermes-nous-light': 'hermes-nous',
+    'hermes-official': 'hermes-official-light',
+    'hermes-official-light': 'hermes-official',
+    'hermes-classic': 'hermes-classic-light',
+    'hermes-classic-light': 'hermes-classic',
+    'hermes-slate': 'hermes-slate-light',
+    'hermes-slate-light': 'hermes-slate',
   }
 
   return (
     <button
       type="button"
       onClick={() => {
-        // Fall back to current family rather than dropping the user into claude-official
-        const nextDataTheme =
-          LIGHT_DARK_PAIRS[currentDataTheme] ||
-          (isDark
-            ? `${currentDataTheme}-light`
-            : currentDataTheme.replace(/-light$/, ''))
+        // Fall back to current family rather than dropping the user into hermes-official
+        const nextDataTheme = LIGHT_DARK_PAIRS[currentDataTheme] || (isDark ? `${currentDataTheme}-light` : currentDataTheme.replace(/-light$/, ''))
         // Import and call setTheme to persist and apply
         import('@/lib/theme').then(({ setTheme }) => {
           setTheme(nextDataTheme as any)
@@ -112,11 +103,7 @@ function ThemeToggleMini() {
       style={{ color: 'var(--theme-muted)' }}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
     >
-      <HugeiconsIcon
-        icon={isDark ? Sun02Icon : Moon02Icon}
-        size={16}
-        strokeWidth={1.5}
-      />
+      <HugeiconsIcon icon={isDark ? Sun02Icon : Moon02Icon} size={16} strokeWidth={1.5} />
     </button>
   )
 }
@@ -135,6 +122,8 @@ type ChatSidebarProps = {
   sessionsError: string | null
   onRetrySessions: () => void
 }
+
+
 
 // ── Reusable nav item ───────────────────────────────────────────────────
 
@@ -216,23 +205,9 @@ function NavItem({
           transition={transition}
           className="flex min-w-0 items-center gap-2"
         >
-          <span className="overflow-hidden whitespace-nowrap">
-            {item.label}
-          </span>
+          <span className="overflow-hidden whitespace-nowrap">{item.label}</span>
           {item.badge && item.badge !== 'error-dot' ? (
-            <span
-              className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-bold leading-none"
-              style={
-                item.badge === 'NEW'
-                  ? {
-                      background: 'linear-gradient(180deg, #fde68a 0%, #fbbf24 50%, #d4a017 100%)',
-                      color: '#0b1320',
-                      boxShadow: '0 0 8px rgba(250,204,21,0.4)',
-                      letterSpacing: '0.08em',
-                    }
-                  : undefined
-              }
-            >
+            <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full border border-primary-700 bg-primary-900 px-2 py-0.5 text-[10px] font-semibold leading-none text-primary-300">
               {item.badge}
             </span>
           ) : null}
@@ -253,7 +228,7 @@ function NavItem({
             <TooltipTrigger
               render={
                 <Link
-                  to={item.to}
+                  to={item.to!}
                   search={item.search}
                   hash={item.hash}
                   onClick={handleSelect}
@@ -271,7 +246,7 @@ function NavItem({
     }
     return (
       <Link
-        to={item.to}
+        to={item.to!}
         search={item.search}
         hash={item.hash}
         onClick={handleSelect}
@@ -331,7 +306,7 @@ function NavItem({
 
 // ── Last-visited route tracking ─────────────────────────────────────────
 
-const LAST_ROUTE_KEY = 'claude-sidebar-last-route'
+const LAST_ROUTE_KEY = 'hermes-sidebar-last-route'
 
 function getLastRoute(section: string): string | null {
   try {
@@ -528,8 +503,13 @@ function ChatSidebarComponent({
   sessionsError,
   onRetrySessions,
 }: ChatSidebarProps) {
-  const { settingsOpen, settingsSection, setSettingsOpen, handleOpenSettings } =
-    useSidebarSettings()
+  const { t } = useLocale()
+  const {
+    settingsOpen,
+    settingsSection,
+    setSettingsOpen,
+    handleOpenSettings,
+  } = useSidebarSettings()
   const profileDisplayName = useChatSettingsStore(selectChatProfileDisplayName)
   const profileAvatarDataUrl = useChatSettingsStore(
     selectChatProfileAvatarDataUrl,
@@ -547,7 +527,7 @@ function ChatSidebarComponent({
   useEffect(() => {
     function handleOpenSettingsEvent(event: Event) {
       const detail = (event as CustomEvent<ChatOpenSettingsDetail>).detail
-      handleOpenSettings(detail.section === 'appearance' ? 'appearance' : 'claude')
+      handleOpenSettings(detail?.section === 'appearance' ? 'appearance' : 'hermes')
     }
 
     window.addEventListener(CHAT_OPEN_SETTINGS_EVENT, handleOpenSettingsEvent)
@@ -576,17 +556,13 @@ function ChatSidebarComponent({
     pathname === '/new' || pathname.startsWith('/chat/new')
   const _isSettingsActive = pathname === '/settings'
   const isSkillsActive = pathname === '/skills'
-  const isMcpActive = pathname === '/mcp'
   const isFilesActive = pathname === '/files'
-  const isPlaygroundActive = pathname === '/playground'
-  const isAgoraActive = pathname === '/agora'
   const isTerminalActive = pathname === '/terminal'
   const isJobsActive = pathname === '/jobs'
   const isMemoryActive = pathname === '/memory'
   const isTasksActive = pathname === '/tasks'
   const isConductorActive = pathname === '/conductor'
   const isOperationsActive = pathname === '/operations'
-  const isSwarmActive = pathname === '/swarm' || pathname === '/swarm2'
   const mainRoutes = ['/chat', '/new', '/files', '/terminal']
   const knowledgeRoutes = ['/memory', '/skills']
   const systemRoutes = ['/settings', '/logs']
@@ -606,17 +582,19 @@ function ChatSidebarComponent({
     ease: isCollapsed ? 'easeIn' : 'easeOut',
   } as const
 
+
+
   // Collapsible section states
   const [mainExpanded, toggleMain] = usePersistedBool(
-    'claude-sidebar-main-expanded',
+    'hermes-sidebar-main-expanded',
     true,
   )
   const [knowledgeExpanded, toggleKnowledge] = usePersistedBool(
-    'claude-sidebar-knowledge-expanded',
+    'hermes-sidebar-knowledge-expanded',
     true,
   )
   const [_systemExpanded, _toggleSystem] = usePersistedBool(
-    'claude-sidebar-system-expanded',
+    'hermes-sidebar-system-expanded',
     false,
   )
 
@@ -632,7 +610,6 @@ function ChatSidebarComponent({
   const [providersOpen, setProvidersOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [isHoverExpanded, setIsHoverExpanded] = useState(false)
-  const sidebarHoverExpand = useChatSettingsStore(selectSidebarHoverExpand)
   const sidebarRef = useRef<HTMLElement | null>(null)
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -688,18 +665,16 @@ function ChatSidebarComponent({
   }, [])
 
   useEffect(() => {
-    if (isMobile || !isCollapsed || !sidebarHoverExpand) {
+    if (isMobile || !isCollapsed) {
       setIsHoverExpanded(false)
     }
-  }, [isCollapsed, isMobile, sidebarHoverExpand])
+  }, [isCollapsed, isMobile])
 
-  const isHoverPreviewExpanded =
-    sidebarHoverExpand && !isMobile && isCollapsed && isHoverExpanded
-  const isVisuallyCollapsed = isCollapsed && !isHoverPreviewExpanded
+  const isVisuallyCollapsed = isCollapsed && !isHoverExpanded
+  const isHoverPreviewExpanded = !isMobile && isCollapsed && isHoverExpanded
+
 
   function handleSidebarToggle() {
-    // In hover-preview mode, a click should dismiss the preview first;
-    // otherwise toggle the persistent collapsed state.
     if (isHoverPreviewExpanded) {
       setIsHoverExpanded(false)
       return
@@ -773,7 +748,7 @@ function ChatSidebarComponent({
   const searchItem: NavItemDef = {
     kind: 'button',
     icon: Search01Icon,
-    label: 'Search',
+    label: t('nav.search'),
     active: isSearchModalOpen,
     onClick: openSearchModal,
   }
@@ -795,7 +770,6 @@ function ChatSidebarComponent({
       label: t('nav.chat'),
       active: isChatActive,
     },
-
     {
       kind: 'link',
       to: '/files',
@@ -821,31 +795,23 @@ function ChatSidebarComponent({
       kind: 'link',
       to: '/tasks',
       icon: CheckListIcon,
-      label: 'Tasks',
+      label: t('nav.tasks'),
       active: isTasksActive,
     },
     {
       kind: 'link',
       to: '/conductor',
       icon: Rocket01Icon,
-      label: 'Conductor',
+      label: t('nav.conductor'),
       active: isConductorActive,
     },
     {
       kind: 'link',
       to: '/operations',
-      icon: UserMultipleIcon,
-      label: 'Operations',
+      icon: UserGroupIcon,
+      label: t('nav.operations'),
       active: isOperationsActive,
     },
-    {
-      kind: 'link',
-      to: '/swarm',
-      icon: UserGroupIcon,
-      label: 'Swarm',
-      active: isSwarmActive,
-    },
-
   ]
 
   const knowledgeItems: Array<NavItemDef> = [
@@ -866,13 +832,6 @@ function ChatSidebarComponent({
     },
     {
       kind: 'link',
-      to: '/mcp',
-      icon: McpServerIcon,
-      label: 'MCP',
-      active: isMcpActive,
-    },
-    {
-      kind: 'link',
       to: '/profiles',
       icon: UserMultipleIcon,
       label: t('nav.profiles'),
@@ -889,28 +848,17 @@ function ChatSidebarComponent({
       }}
       initial={false}
       animate={{
-        width: isVisuallyCollapsed
-          ? isMobile
-            ? 0
-            : 48
-          : isMobile
-            ? '85vw'
-            : 300,
+        width: isVisuallyCollapsed ? (isMobile ? 0 : 48) : isMobile ? '85vw' : 300,
       }}
       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-      className={cn(
-        asideProps.className,
-        isMobile && isCollapsed && 'pointer-events-none overflow-hidden',
-      )}
+      className={cn(asideProps.className, isMobile && isCollapsed && 'pointer-events-none overflow-hidden')}
       data-tour="sidebar-container"
       style={isMobile ? { maxWidth: 360 } : undefined}
       onMouseEnter={() => {
-        if (sidebarHoverExpand && !isMobile && isCollapsed) {
-          setIsHoverExpanded(true)
-        }
+        if (!isMobile && isCollapsed) setIsHoverExpanded(true)
       }}
       onMouseLeave={() => {
-        if (sidebarHoverExpand && !isMobile) setIsHoverExpanded(false)
+        if (!isMobile) setIsHoverExpanded(false)
       }}
       aria-hidden={isMobile && isCollapsed ? true : undefined}
       {...(isMobile && isCollapsed ? { inert: true } : {})}
@@ -936,17 +884,8 @@ function ChatSidebarComponent({
                   'w-full pl-1.5 justify-start gap-2',
                 )}
               >
-                <img
-                  src="/claude-avatar.webp"
-                  alt="Hermes Agent"
-                  className="size-6 rounded-lg"
-                />
-                <span
-                  className="text-sm font-semibold tracking-tight"
-                  style={{ color: 'var(--theme-text)' }}
-                >
-                  Hermes Workspace
-                </span>
+                <img src="/hermes-avatar.webp" alt="munr" className="size-6 rounded-lg" />
+                <span className="text-sm font-semibold tracking-tight" style={{ color: 'var(--theme-text)' }}>{t('nav.workspace')}</span>
               </Link>
             </motion.div>
           ) : null}
@@ -959,9 +898,7 @@ function ChatSidebarComponent({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  aria-label={
-                    isVisuallyCollapsed ? 'Open Sidebar' : 'Close Sidebar'
-                  }
+                  aria-label={isVisuallyCollapsed ? t('nav.openSidebar') : t('nav.closeSidebar')}
                   className="absolute right-2 top-1/2 shrink-0 -translate-y-1/2 opacity-80 hover:opacity-100"
                   data-tour="sidebar-collapse-toggle"
                 >
@@ -982,7 +919,7 @@ function ChatSidebarComponent({
               }
             />
             <TooltipContent side="right">
-              {isVisuallyCollapsed ? 'Open Sidebar' : 'Close Sidebar'}
+              {isVisuallyCollapsed ? t('nav.openSidebar') : t('nav.closeSidebar')}
             </TooltipContent>
           </TooltipRoot>
         </TooltipProvider>
@@ -1027,47 +964,7 @@ function ChatSidebarComponent({
               strokeWidth={1.5}
               className="size-5 shrink-0"
             />
-            <span>New Session</span>
-          </Link>
-        </div>
-      )}
-
-      {/* ── HermesWorld featured link (gold castle, NEW badge) ────── */}
-      {/* Hide when VITE_HERMESWORLD_ENABLED is explicitly '0' */}
-      {!isVisuallyCollapsed &&
-        (import.meta as any).env?.VITE_HERMESWORLD_ENABLED !== '0' && (
-        <div className="px-2 pb-2">
-          <Link
-            to="/playground"
-            onClick={() => onSelectSession?.()}
-            className={cn(
-              buttonVariants({ variant: 'ghost', size: 'sm' }),
-              'group w-full justify-start gap-2.5 px-3 py-2 text-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800',
-              isPlaygroundActive &&
-                'bg-accent-500/10 text-accent-500 hover:bg-accent-50 dark:hover:bg-accent-900/300/15',
-            )}
-            data-tour="hermesworld"
-          >
-            <HugeiconsIcon
-              icon={Castle02Icon}
-              size={20}
-              strokeWidth={1.5}
-              className="size-5 shrink-0"
-              style={{ color: '#facc15' }}
-            />
-            <span>HermesWorld</span>
-            <span
-              className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-bold leading-none"
-              style={{
-                background:
-                  'linear-gradient(180deg, #fde68a 0%, #fbbf24 50%, #d4a017 100%)',
-                color: '#0b1320',
-                boxShadow: '0 0 8px rgba(250,204,21,0.4)',
-                letterSpacing: '0.08em',
-              }}
-            >
-              NEW
-            </span>
+            <span>{t('nav.newSession')}</span>
           </Link>
         </div>
       )}
@@ -1077,7 +974,7 @@ function ChatSidebarComponent({
         {/* Navigation sections */}
         <div className={cn('shrink-0 space-y-0.5 px-2', isMobile && 'order-2')}>
           <SectionLabel
-            label="Main"
+            label={t('nav.main')}
             isCollapsed={isVisuallyCollapsed}
             transition={transition}
             collapsible
@@ -1094,7 +991,7 @@ function ChatSidebarComponent({
           />
 
           <SectionLabel
-            label="Knowledge"
+            label={t('nav.knowledge')}
             isCollapsed={isVisuallyCollapsed}
             transition={transition}
             collapsible
@@ -1121,7 +1018,12 @@ function ChatSidebarComponent({
         </div>
 
         {/* Sessions list */}
-        <div className={cn('shrink-0 mt-1', isMobile && 'order-1')}>
+        <div
+          className={cn(
+            'shrink-0 mt-1',
+            isMobile && 'order-1',
+          )}
+        >
           <AnimatePresence initial={false}>
             {!isVisuallyCollapsed && (
               <motion.div
@@ -1155,12 +1057,10 @@ function ChatSidebarComponent({
       {/* ── Footer with User Menu ─────────────────────────────────── */}
       <div className="px-2 py-2.5 border-t shrink-0 theme-border theme-panel">
         {/* User card + actions */}
-        <div
-          className={cn(
-            'flex items-center rounded-lg transition-colors',
-            isVisuallyCollapsed ? 'flex-col gap-2 py-2' : 'gap-2.5 px-2 py-1.5',
-          )}
-        >
+        <div className={cn(
+          'flex items-center rounded-lg transition-colors',
+          isVisuallyCollapsed ? 'flex-col gap-2 py-2' : 'gap-2.5 px-2 py-1.5',
+        )}>
           {/* User menu trigger */}
           <MenuRoot>
             <MenuTrigger
@@ -1195,7 +1095,7 @@ function ChatSidebarComponent({
             <MenuContent side="top" align="start" className="min-w-[200px]">
               <MenuItem
                 onClick={function onOpenSettings() {
-                  handleOpenSettings('claude')
+                  handleOpenSettings('hermes')
                 }}
                 className="justify-between"
               >
@@ -1205,7 +1105,7 @@ function ChatSidebarComponent({
                     size={20}
                     strokeWidth={1.5}
                   />
-                  Settings
+                  {t('nav.settings')}
                 </span>
               </MenuItem>
             </MenuContent>
@@ -1216,15 +1116,11 @@ function ChatSidebarComponent({
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
-                onClick={() => handleOpenSettings('claude')}
+                onClick={() => handleOpenSettings('hermes')}
                 className="shrink-0 rounded-lg p-1.5 text-primary-400 hover:bg-primary-200 dark:hover:bg-neutral-800 hover:text-primary-600 dark:hover:text-neutral-300 transition-colors"
-                aria-label="Settings"
+                aria-label={t('nav.settings')}
               >
-                <HugeiconsIcon
-                  icon={Settings01Icon}
-                  size={16}
-                  strokeWidth={1.5}
-                />
+                <HugeiconsIcon icon={Settings01Icon} size={16} strokeWidth={1.5} />
               </button>
               <ThemeToggleMini />
             </div>

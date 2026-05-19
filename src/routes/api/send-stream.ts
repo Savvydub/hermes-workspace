@@ -1,43 +1,30 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { buildResolvedSessionHeaders } from '../../lib/send-stream-session-headers'
-import { buildWorkspaceScopedTextMessage } from '../../lib/workspace-message-scope'
-import {
-  collectSyntheticLiveToolEvents,
-  createSyntheticLiveToolTracker,
-} from './-send-stream-live-tools'
 import { resolveSessionKey } from '../../server/session-utils'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { requireJsonContentType } from '../../server/rate-limit'
 import { publishChatEvent } from '../../server/chat-event-bus'
-import { loadWorkspaceCatalog } from './workspace'
 import {
   registerActiveSendRun,
   unregisterActiveSendRun,
 } from '../../server/send-run-tracker'
-import {
-  appendRunText,
-  createPersistedRun,
-  markRunStatus,
-  setRunThinking,
-  upsertRunToolCall,
-} from '../../server/run-store'
 import { getChatMode } from '../../server/gateway-capabilities'
 import { ensureLocalSession, appendLocalMessage, getLocalMessages, touchLocalSession } from '../../server/local-session-store'
 import { getLocalProviderDef, getDiscoveredModels } from '../../server/local-provider-discovery'
-import { openaiChat } from '../../server/openai-compat-api'
-import { streamResponses } from '../../server/responses-api'
-import { selectPortableConversationHistory } from '../../server/portable-history'
+import {
+  
+  
+  openaiChat
+} from '../../server/openai-compat-api'
 import {
   SESSIONS_API_UNAVAILABLE_MESSAGE,
   createSession,
   ensureGatewayProbed,
   getGatewayCapabilities,
-  getMessages as getSessionMessagesFromAgent,
   listSessions,
   streamChat,
-} from '../../server/claude-api'
+} from '../../server/hermes-api'
 import type {OpenAICompatContentPart, OpenAICompatMessage} from '../../server/openai-compat-api';
-// Claude agent runs can take 5+ minutes with complex tool chains
+// Hermes agent runs can take 5+ minutes with complex tool chains
 const SEND_STREAM_RUN_TIMEOUT_MS = 600_000
 const SESSION_BOOTSTRAP_KEYS = new Set(['main', 'new'])
 
@@ -196,11 +183,11 @@ function normalizePortableHistory(
   return normalized
 }
 
-function normalizeClaudeErrorMessage(error: unknown): string {
+function normalizeHermesErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
   const message = raw.trim()
-  if (!message) return 'Claude request failed'
-  return message.replace(/\bserver\b/gi, 'Claude')
+  if (!message) return 'Request failed'
+  return message
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
@@ -333,7 +320,7 @@ export const Route = createFileRoute('/api/send-stream')({
           sessionKey = resolved.sessionKey
           resolvedFriendlyId = resolved.sessionKey
         } catch (err) {
-          const errorMsg = normalizeClaudeErrorMessage(err)
+          const errorMsg = normalizeHermesErrorMessage(err)
           if (errorMsg === 'session not found') {
             return new Response(
               JSON.stringify({ ok: false, error: 'session not found' }),
@@ -370,21 +357,12 @@ export const Route = createFileRoute('/api/send-stream')({
           resolvedFriendlyId = sessionKey
         }
 
-        const workspaceScope = await loadWorkspaceCatalog().catch(() => null)
-        const scopedMessage = buildWorkspaceScopedTextMessage(
-          getChatMessage(message, attachments),
-          workspaceScope,
-        )
-
         // Create streaming response using the SHARED server connection
         const encoder = new TextEncoder()
         let streamClosed = false
         let activeRunId: string | null = null
-        let activeRunSessionKey: string | null = null
-        let persistedRunReady: Promise<unknown> | null = null
         let unregisterTimer: ReturnType<typeof setTimeout> | null = null
         let streamTimeoutTimer: ReturnType<typeof setTimeout> | null = null
-        let heartbeatTimer: ReturnType<typeof setInterval> | null = null
         const abortController = new AbortController()
         let closeStream = () => {
           streamClosed = true
@@ -392,43 +370,15 @@ export const Route = createFileRoute('/api/send-stream')({
 
         const stream = new ReadableStream({
           async start(controller) {
-            let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-            let lastClientEventAt = Date.now()
-            const enqueueRaw = (payload: string) => {
-              if (streamClosed) return
-              controller.enqueue(encoder.encode(payload))
-            }
             const sendEvent = (event: string, data: unknown) => {
               if (streamClosed) return
-              lastClientEventAt = Date.now()
               const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-              enqueueRaw(payload)
+              controller.enqueue(encoder.encode(payload))
             }
-
-            // Cloudflare Tunnel/Access can otherwise leave small SSE streams idle
-            // long enough that the browser-side fetch is canceled before visible
-            // assistant chunks arrive. Send an initial padding comment and a
-            // lightweight recognized event periodically so public Workspace chats
-            // do not sit at "Thinking…" until the frontend reports failure.
-            enqueueRaw(`: ${' '.repeat(2048)}\n\n`)
-            heartbeatTimer = setInterval(() => {
-              if (streamClosed) return
-              if (Date.now() - lastClientEventAt < 10_000) return
-              // Heartbeat to keep Cloudflare/Access from culling the SSE stream.
-              // Use a dedicated hb_signal event (not 'thinking') so it does not
-              // pollute the TUI activity card with fake thinking text. Send a
-              // tiny SSE comment as the actual keepalive byte.
-              sendEvent('hb_signal', { sessionKey })
-              enqueueRaw(': keepalive\n\n')
-            }, 10_000)
 
             closeStream = () => {
               if (streamClosed) return
               streamClosed = true
-              if (heartbeatTimer) {
-                clearInterval(heartbeatTimer)
-                heartbeatTimer = null
-              }
               if (unregisterTimer) {
                 clearTimeout(unregisterTimer)
                 unregisterTimer = null
@@ -436,10 +386,6 @@ export const Route = createFileRoute('/api/send-stream')({
               if (streamTimeoutTimer) {
                 clearTimeout(streamTimeoutTimer)
                 streamTimeoutTimer = null
-              }
-              if (heartbeatTimer) {
-                clearInterval(heartbeatTimer)
-                heartbeatTimer = null
               }
               if (activeRunId) {
                 unregisterActiveSendRun(activeRunId)
@@ -451,38 +397,6 @@ export const Route = createFileRoute('/api/send-stream')({
               } catch {
                 // ignore
               }
-            }
-
-            // Keep the SSE stream alive during long agent processing (tool calls,
-            // slow LLM responses on large contexts). Without this the client-side
-            // no-activity timer fires after 2-3 min and aborts the stream.
-            heartbeatTimer = setInterval(() => {
-              sendEvent('heartbeat', { timestamp: Date.now() })
-            }, 30_000)
-
-            const persistRunStarted = (
-              runId: string | undefined,
-              runSessionKey: string,
-              friendlyId: string,
-            ) => {
-              if (!runId || persistedRunReady) return
-              activeRunSessionKey = runSessionKey
-              persistedRunReady = createPersistedRun({
-                runId,
-                sessionKey: runSessionKey,
-                friendlyId,
-              }).catch(() => null)
-            }
-
-            const persistActiveRun = (
-              write: (sessionKey: string, runId: string) => Promise<unknown>,
-            ) => {
-              if (!activeRunId || !activeRunSessionKey) return
-              const runId = activeRunId
-              const runSessionKey = activeRunSessionKey
-              void (persistedRunReady ?? Promise.resolve())
-                .then(() => write(runSessionKey, runId))
-                .catch(() => null)
             }
 
             try {
@@ -501,7 +415,6 @@ export const Route = createFileRoute('/api/send-stream')({
 
                 activeRunId = runId
                 registerActiveSendRun(runId)
-                persistRunStarted(runId, portableSessionKey, portableFriendlyId)
                 unregisterTimer = setTimeout(() => {
                   if (activeRunId) {
                     unregisterActiveSendRun(activeRunId)
@@ -517,7 +430,7 @@ export const Route = createFileRoute('/api/send-stream')({
 
                 try {
                   const userContent = buildMultimodalContent(
-                    scopedMessage,
+                    message,
                     attachments,
                   )
                   // Inject locale preference so the agent responds in the user's language
@@ -525,13 +438,9 @@ export const Route = createFileRoute('/api/send-stream')({
                   const localeSystemMsg: Array<OpenAICompatMessage> = locale && locale !== 'en'
                     ? [{ role: 'system', content: `Respond in ${locale === 'es' ? 'Spanish' : locale === 'fr' ? 'French' : locale === 'zh' ? 'Chinese' : locale === 'de' ? 'German' : locale === 'ja' ? 'Japanese' : locale === 'ko' ? 'Korean' : locale === 'pt' ? 'Portuguese' : locale === 'ru' ? 'Russian' : locale === 'ar' ? 'Arabic' : 'English'}. The user's interface is set to this language.` }]
                     : []
-                  // Load persisted history for this session, then append user message.
-                  // When the gateway can bind portable chat to a server-side session
-                  // via X-Claude-Session-Id, replaying the entire local transcript on
-                  // every turn duplicates prompt context and can trip model limits
-                  // on otherwise simple tasks (#405).
+                  // Load persisted history for this session, then append user message
                   const persistedMessages = getLocalMessages(portableSessionKey)
-                  const persistedHistory = persistedMessages.map((m) => ({
+                  const persistedHistory = persistedMessages.map(m => ({
                     role: m.role as 'user' | 'assistant' | 'system',
                     content: m.content,
                   }))
@@ -542,11 +451,8 @@ export const Route = createFileRoute('/api/send-stream')({
                     content: typeof body.message === 'string' ? body.message : '',
                     timestamp: Date.now(),
                   })
-                  const effectiveHistory = selectPortableConversationHistory(
-                    persistedHistory,
-                    history,
-                    { localBaseUrl },
-                  )
+                  // Use persisted history if available, otherwise fall back to client-sent history
+                  const effectiveHistory = persistedHistory.length > 0 ? persistedHistory : history
                   const portableMessages: Array<OpenAICompatMessage> = [
                     ...localeSystemMsg,
                     ...effectiveHistory,
@@ -555,169 +461,6 @@ export const Route = createFileRoute('/api/send-stream')({
                       content: userContent,
                     },
                   ]
-                  // Vanilla Hermes Agent (>=v0.12.x) ships a structured
-                  // Responses-API streaming surface at POST /v1/responses
-                  // that carries full tool args + results, unlike the
-                  // /v1/chat/completions surface which only emits a thin
-                  // hermes.tool.progress lifecycle event. When the user
-                  // opts into the Responses path AND we're talking to the
-                  // local Hermes gateway (no localBaseUrl override), use
-                  // it so the TUI tool card can render INPUT JSON and
-                  // tool output text live during the run. Falls back
-                  // automatically on any error to the existing
-                  // openaiChat path.
-                  const useResponsesApi =
-                    process.env.HERMES_USE_RESPONSES === '1' && !localBaseUrl
-                  if (useResponsesApi) {
-                    let thinking = ''
-                    // Track tool calls by callId so a `tool.completed`
-                    // followed by `tool.output` can carry the full
-                    // arguments forward without losing them.
-                    const toolStateByCallId = new Map<
-                      string,
-                      {
-                        name: string
-                        args: Record<string, unknown> | string | null
-                      }
-                    >()
-                    try {
-                      const responsesStream = streamResponses({
-                        input: scopedMessage,
-                        conversationHistory: effectiveHistory,
-                        model:
-                          typeof body.model === 'string' ? body.model : undefined,
-                        sessionId: portableSessionKey,
-                        signal: abortController.signal,
-                      })
-                      for await (const ev of responsesStream) {
-                        if (ev.kind === 'text.delta') {
-                          accumulated += ev.delta
-                          persistActiveRun((runSessionKey, activeId) =>
-                            appendRunText(
-                              runSessionKey,
-                              activeId,
-                              accumulated,
-                              { replace: true },
-                            ),
-                          )
-                          sendEvent('chunk', {
-                            text: accumulated,
-                            fullReplace: true,
-                            sessionKey: portableSessionKey,
-                            runId,
-                          })
-                          continue
-                        }
-                        if (ev.kind === 'tool.started') {
-                          toolStateByCallId.set(ev.callId, {
-                            name: ev.name,
-                            args: ev.args,
-                          })
-                          const argsForCard =
-                            ev.args && typeof ev.args === 'object'
-                              ? (ev.args as Record<string, unknown>)
-                              : undefined
-                          persistActiveRun((runSessionKey, activeId) =>
-                            upsertRunToolCall(runSessionKey, activeId, {
-                              id: ev.callId,
-                              name: ev.name,
-                              phase: 'calling',
-                              args: argsForCard,
-                            }),
-                          )
-                          sendEvent('tool', {
-                            phase: 'calling',
-                            name: ev.name,
-                            toolCallId: ev.callId,
-                            args: argsForCard,
-                            sessionKey: portableSessionKey,
-                            runId,
-                          })
-                          continue
-                        }
-                        if (ev.kind === 'tool.completed') {
-                          // Mark as complete but keep the args+result we
-                          // accumulated so the card stays expandable.
-                          // Vanilla emits tool.completed BEFORE the
-                          // matching function_call_output, so we
-                          // intentionally do not flip phase to 'complete'
-                          // until the output arrives. Otherwise the card
-                          // briefly flashes "done" with no result text.
-                          continue
-                        }
-                        if (ev.kind === 'tool.output') {
-                          const state = toolStateByCallId.get(ev.callId)
-                          const argsForCard =
-                            state?.args && typeof state.args === 'object'
-                              ? (state.args as Record<string, unknown>)
-                              : undefined
-                          const name = state?.name || 'tool'
-                          persistActiveRun((runSessionKey, activeId) =>
-                            upsertRunToolCall(runSessionKey, activeId, {
-                              id: ev.callId,
-                              name,
-                              phase: 'complete',
-                              args: argsForCard,
-                              result: ev.output,
-                            }),
-                          )
-                          sendEvent('tool', {
-                            phase: 'complete',
-                            name,
-                            toolCallId: ev.callId,
-                            args: argsForCard,
-                            result: ev.output,
-                            sessionKey: portableSessionKey,
-                            runId,
-                          })
-                          continue
-                        }
-                        if (ev.kind === 'completed') {
-                          // Final terminal event — fall through to the
-                          // shared 'done' emit below.
-                          break
-                        }
-                        if (ev.kind === 'failed') {
-                          throw new Error(ev.error)
-                        }
-                      }
-                      appendLocalMessage(portableSessionKey, {
-                        id: crypto.randomUUID(),
-                        role: 'assistant',
-                        content: accumulated,
-                        timestamp: Date.now(),
-                      })
-                      touchLocalSession(portableSessionKey)
-                      persistActiveRun((runSessionKey, activeId) =>
-                        markRunStatus(runSessionKey, activeId, 'complete'),
-                      )
-                      sendEvent('done', {
-                        state: 'complete',
-                        sessionKey: portableSessionKey,
-                        runId,
-                        message: {
-                          role: 'assistant',
-                          content: [
-                            ...(thinking ? [{ type: 'thinking', thinking }] : []),
-                            { type: 'text', text: accumulated },
-                          ],
-                        },
-                      })
-                      closeStream()
-                      return
-                    } catch (err) {
-                      // Log and fall through to the openaiChat path so a
-                      // misconfigured /v1/responses surface (older agent,
-                      // CORS issue, network blip) doesn't break the chat.
-                      console.warn(
-                        '[send-stream] /v1/responses path failed, falling back to /v1/chat/completions:',
-                        err,
-                      )
-                      // Reset accumulated so the fallback starts clean.
-                      accumulated = ''
-                    }
-                  }
-
                   const stream = await openaiChat(portableMessages, {
                     model: localBaseUrl ? bareModel : (typeof body.model === 'string' ? body.model : undefined),
                     temperature:
@@ -735,56 +478,23 @@ export const Route = createFileRoute('/api/send-stream')({
                   for await (const chunk of stream) {
                     if (chunk.type === 'reasoning') {
                       thinking += chunk.text
-                      persistActiveRun((runSessionKey, activeId) =>
-                        setRunThinking(runSessionKey, activeId, thinking),
-                      )
                       sendEvent('thinking', {
                         text: thinking,
                         sessionKey: portableSessionKey,
                         runId,
                       })
                     } else if (chunk.type === 'tool') {
-                      // Prefer the gateway's stable tool_call_id so 'running'
-                      // and 'completed' events for the same call collapse to
-                      // one card row. Fall back to a synthetic id only when
-                      // the upstream payload lacks one (older Hermes builds).
                       toolEventCount += 1
-                      const toolCallId =
-                        chunk.toolCallId ||
-                        `${runId}:${chunk.name}:${toolEventCount}`
-                      // Map upstream status -> internal phase. 'running'
-                      // arrives at tool start; 'completed' at finish.
-                      // Missing status (back-compat path) is treated as a
-                      // one-shot 'calling' to mirror the previous behavior.
-                      const phase =
-                        chunk.status === 'completed'
-                          ? 'complete'
-                          : chunk.status === 'running'
-                            ? 'calling'
-                            : 'start'
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: toolCallId,
-                          name: chunk.name || 'tool',
-                          phase,
-                          preview: chunk.label,
-                        }),
-                      )
                       sendEvent('tool', {
-                        phase,
+                        phase: 'start',
                         name: chunk.name,
-                        toolCallId,
+                        toolCallId: `${runId}:${chunk.name}:${toolEventCount}`,
                         preview: chunk.label,
                         sessionKey: portableSessionKey,
                         runId,
                       })
                     } else {
                       accumulated += chunk.text
-                      persistActiveRun((runSessionKey, activeId) =>
-                        appendRunText(runSessionKey, activeId, accumulated, {
-                          replace: true,
-                        }),
-                      )
                       sendEvent('chunk', {
                         text: accumulated,
                         fullReplace: true,
@@ -803,9 +513,6 @@ export const Route = createFileRoute('/api/send-stream')({
                   })
                   touchLocalSession(portableSessionKey)
 
-                  persistActiveRun((runSessionKey, activeId) =>
-                    markRunStatus(runSessionKey, activeId, 'complete'),
-                  )
                   sendEvent('done', {
                     state: 'complete',
                     sessionKey: portableSessionKey,
@@ -821,12 +528,8 @@ export const Route = createFileRoute('/api/send-stream')({
                   closeStream()
                 } catch (err) {
                   if (!streamClosed) {
-                    const errorMessage = normalizeClaudeErrorMessage(err)
-                    persistActiveRun((runSessionKey, activeId) =>
-                      markRunStatus(runSessionKey, activeId, 'error', errorMessage),
-                    )
                     sendEvent('error', {
-                      message: errorMessage,
+                      message: normalizeHermesErrorMessage(err),
                       sessionKey: portableSessionKey,
                       runId,
                     })
@@ -892,85 +595,10 @@ export const Route = createFileRoute('/api/send-stream')({
               // directly to useStreamingMessage. Skip publishChatEvent to prevent
               // useRealtimeChatHistory from creating duplicate message bubbles.
               const skipPublish = true
-
-              // Mid-run tool polling: vanilla Hermes Agent currently does not
-              // emit tool.* SSE events live (callback signature drift). Until
-              // upstream fixes that, we synthesize live tool events by polling
-              // the agent's session messages every ~1.5s during the run and
-              // emitting any new tool calls as event: tool with phase complete
-              // as soon as their tool_result message lands. The Workspace
-              // chat-store dedupes by tool_call_id so this is safe alongside
-              // any real live events that might arrive.
-              const syntheticLiveToolTracker = createSyntheticLiveToolTracker()
-              let liveRunActive = true
-              const livePollIntervalMs = 800
-              // Snapshot the session message count at run-start so the poller
-              // and the post-run backfill only consider messages persisted by
-              // THIS run. Without this, "the most recent assistant with
-              // tool_calls" can resolve to the previous turn, surfacing stale
-              // tool cards (off-by-one-turn bug).
-              let liveBaselineCount = 0
-              try {
-                const baseline = (await getSessionMessagesFromAgent(
-                  sessionKey,
-                )) as unknown as Array<Record<string, unknown>>
-                if (Array.isArray(baseline)) liveBaselineCount = baseline.length
-              } catch {
-                liveBaselineCount = 0
-              }
-              const livePollerPromise = (async () => {
-                // Initial small delay so the agent has time to ingest the
-                // user message before we start asking for session state.
-                await new Promise((r) => setTimeout(r, 600))
-                while (liveRunActive) {
-                  if (!liveRunActive || streamClosed) break
-                  try {
-                    const allMsgs = (await getSessionMessagesFromAgent(
-                      sessionKey,
-                    )) as unknown as Array<Record<string, unknown>>
-                    if (!Array.isArray(allMsgs) || allMsgs.length === 0) {
-                      await new Promise((r) =>
-                        setTimeout(r, livePollIntervalMs),
-                      )
-                      continue
-                    }
-                    // Only inspect messages added on or after this run started.
-                    const msgs = allMsgs.slice(liveBaselineCount)
-                    if (msgs.length === 0) {
-                      await new Promise((r) =>
-                        setTimeout(r, livePollIntervalMs),
-                      )
-                      continue
-                    }
-                    const syntheticEvents = collectSyntheticLiveToolEvents({
-                      messages: msgs,
-                      tracker: syntheticLiveToolTracker,
-                      sessionKey,
-                      runId: activeRunId ?? undefined,
-                    })
-                    if (syntheticEvents.length === 0) {
-                      await new Promise((r) =>
-                        setTimeout(r, livePollIntervalMs),
-                      )
-                      continue
-                    }
-                    for (const synthetic of syntheticEvents) {
-                      sendEvent('tool', synthetic)
-                    }
-                  } catch {
-                    // Best-effort polling; ignore transient errors.
-                  }
-                  await new Promise((r) =>
-                    setTimeout(r, livePollIntervalMs),
-                  )
-                }
-              })()
-
-              try {
-                await streamChat(
+              await streamChat(
                 sessionKey,
                 {
-                  message: scopedMessage,
+                  message: getChatMessage(message, attachments),
                   model:
                     typeof body.model === 'string' ? body.model : undefined,
                   system_message: thinking,
@@ -978,7 +606,7 @@ export const Route = createFileRoute('/api/send-stream')({
                 },
                 {
                   signal: abortController.signal,
-                  async onEvent({ event, data }) {
+                  onEvent({ event, data }) {
                     const sessionKeyFromEvent =
                       typeof data.session_id === 'string' &&
                       data.session_id.trim()
@@ -992,11 +620,6 @@ export const Route = createFileRoute('/api/send-stream')({
                     if (runId && !activeRunId) {
                       activeRunId = runId
                       registerActiveSendRun(runId)
-                      persistRunStarted(
-                        runId,
-                        sessionKeyFromEvent,
-                        sessionKeyFromEvent,
-                      )
                       unregisterTimer = setTimeout(() => {
                         if (activeRunId) {
                           unregisterActiveSendRun(activeRunId)
@@ -1037,7 +660,7 @@ export const Route = createFileRoute('/api/send-stream')({
                               ],
                             },
                             sessionKey: sessionKeyFromEvent,
-                            source: 'claude',
+                            source: 'hermes',
                             runId,
                           })
                       }
@@ -1069,11 +692,6 @@ export const Route = createFileRoute('/api/send-stream')({
                       const content =
                         typeof data.content === 'string' ? data.content : ''
                       if (content) {
-                        persistActiveRun((runSessionKey, activeId) =>
-                          appendRunText(runSessionKey, activeId, content, {
-                            replace: true,
-                          }),
-                        )
                         const translated = {
                           text: content,
                           fullReplace: true,
@@ -1090,9 +708,6 @@ export const Route = createFileRoute('/api/send-stream')({
                       const delta =
                         typeof data.delta === 'string' ? data.delta : ''
                       if (!delta) return
-                      persistActiveRun((runSessionKey, activeId) =>
-                        appendRunText(runSessionKey, activeId, delta),
-                      )
                       const translated = {
                         text: delta,
                         sessionKey: sessionKeyFromEvent,
@@ -1126,15 +741,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId,
-                          name: toolName,
-                          phase: translated.phase,
-                          args: translated.args,
-                          preview,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1145,9 +751,6 @@ export const Route = createFileRoute('/api/send-stream')({
                       const toolName = getToolName(data)
                       if (toolName === '_thinking' || toolName === 'tool') {
                         if (!delta) return
-                        persistActiveRun((runSessionKey, activeId) =>
-                          setRunThinking(runSessionKey, activeId, delta),
-                        )
                         const translated = {
                           text: delta,
                           sessionKey: sessionKeyFromEvent,
@@ -1166,15 +769,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId,
-                          name: toolName,
-                          phase: 'calling',
-                          args: translated.args,
-                          result: translated.result,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1192,15 +786,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId,
-                          name: toolName,
-                          phase: 'complete',
-                          args: translated.args,
-                          result: translated.result,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1242,14 +827,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId || `${runId || 'run'}:memory`,
-                          name: 'memory',
-                          phase: 'complete',
-                          result: translated.result,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1271,14 +848,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId || `${runId || 'run'}:skill`,
-                          name: 'skill',
-                          phase: 'complete',
-                          result: translated.result,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1299,14 +868,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        upsertRunToolCall(runSessionKey, activeId, {
-                          id: translated.toolCallId,
-                          name: toolName,
-                          phase: 'error',
-                          result: translated.result,
-                        }),
-                      )
                       sendEvent('tool', translated)
                       skipPublish || publishChatEvent('tool', translated)
                       return
@@ -1320,14 +881,6 @@ export const Route = createFileRoute('/api/send-stream')({
                         ) ||
                         readString(data.message) ||
                         'Hermes stream error'
-                      persistActiveRun((runSessionKey, activeId) =>
-                        markRunStatus(
-                          runSessionKey,
-                          activeId,
-                          'error',
-                          errorMessage,
-                        ),
-                      )
                       sendEvent('error', {
                         message: errorMessage,
                         sessionKey: sessionKeyFromEvent,
@@ -1338,125 +891,18 @@ export const Route = createFileRoute('/api/send-stream')({
                     }
 
                     if (event === 'run.completed') {
-                      // Backfill tool calls from session history.
-                      // Hermes Agent currently does not stream tool.* events
-                      // reliably, but it persists tool calls on the assistant
-                      // message. Fetch the latest assistant message and emit
-                      // synthetic 'tool' events for each tool call so the
-                      // Workspace UI can render the Activity card.
-                      try {
-                        const sid =
-                          readString(data.session_id) ||
-                          sessionKeyFromEvent ||
-                          ''
-                        if (sid) {
-                          let persistedMessages: Array<
-                            Record<string, unknown>
-                          > = []
-                          try {
-                            persistedMessages =
-                              (await getSessionMessagesFromAgent(
-                                sid,
-                              )) as unknown as Array<Record<string, unknown>>
-                          } catch {
-                            persistedMessages = []
-                          }
-                          // Walk back to the most recent assistant message in
-                          // this run; tool_calls are siblings on it. Also
-                          // collect tool_result entries that immediately
-                          // follow it so we can pair input/output.
-                          // Use the per-run baseline so we never read tool
-                          // calls from a previous turn.
-                          const sliceFrom = Math.max(
-                            0,
-                            Math.min(
-                              liveBaselineCount,
-                              Math.max(0, persistedMessages.length - 1),
-                            ),
-                          )
-                          const recent = persistedMessages.slice(
-                            sliceFrom,
-                          ) as Array<Record<string, unknown>>
-                          let lastAssistantIndex = -1
-                          for (let i = recent.length - 1; i >= 0; i--) {
-                            const m = recent[i] as Record<string, unknown>
-                            if (m && m.role === 'assistant') {
-                              lastAssistantIndex = i
-                              break
-                            }
-                          }
-                          if (lastAssistantIndex >= 0) {
-                            const lastAssistant = recent[
-                              lastAssistantIndex
-                            ] as Record<string, unknown>
-                            const rawToolCalls = (lastAssistant.tool_calls ??
-                              (lastAssistant as any).toolCalls) as
-                              | Array<Record<string, unknown>>
-                              | undefined
-                            const toolCalls =
-                              Array.isArray(rawToolCalls) && rawToolCalls.length
-                                ? rawToolCalls
-                                : []
-
-                            const syntheticEvents = collectSyntheticLiveToolEvents({
-                              messages: recent,
-                              tracker: syntheticLiveToolTracker,
-                              sessionKey: sessionKeyFromEvent,
-                              runId,
-                            })
-                            for (const synthetic of syntheticEvents) {
-                              persistActiveRun(
-                                (runSessionKey, activeId) =>
-                                  upsertRunToolCall(
-                                    runSessionKey,
-                                    activeId,
-                                    {
-                                      id: synthetic.toolCallId,
-                                      name: synthetic.name,
-                                      phase: synthetic.phase,
-                                      args: synthetic.args,
-                                      result: synthetic.result,
-                                    },
-                                  ),
-                              )
-                              sendEvent('tool', synthetic)
-                              skipPublish ||
-                                publishChatEvent('tool', synthetic)
-                            }
-                          }
-                        }
-                      } catch (err) {
-                        // Backfill is best-effort; don't fail the run.
-                        console.warn(
-                          '[send-stream] tool backfill failed:',
-                          err,
-                        )
-                      }
-
                       const translated = {
                         state: 'complete',
                         sessionKey: sessionKeyFromEvent,
                         runId,
                       }
-                      persistActiveRun((runSessionKey, activeId) =>
-                        markRunStatus(runSessionKey, activeId, 'complete'),
-                      )
                       sendEvent('done', translated)
                       skipPublish || publishChatEvent('done', translated)
                       closeStream()
                     }
                   },
                 },
-                )
-              } finally {
-                // Stop the mid-run tool poller and let it drain.
-                liveRunActive = false
-                try {
-                  await livePollerPromise
-                } catch {
-                  // ignore
-                }
-              }
+              )
 
               // Set a timeout to close the stream if no completion event
               streamTimeoutTimer = setTimeout(() => {
@@ -1468,7 +914,7 @@ export const Route = createFileRoute('/api/send-stream')({
             } catch (err) {
               // Only send error if stream hasn't already completed successfully
               if (!streamClosed) {
-                const errorMsg = normalizeClaudeErrorMessage(err)
+                const errorMsg = normalizeHermesErrorMessage(err)
                 sendEvent('error', {
                   message: errorMsg,
                   sessionKey,
@@ -1478,41 +924,17 @@ export const Route = createFileRoute('/api/send-stream')({
             }
           },
           cancel() {
-            // Browser navigation/unmount cancels the response reader. That
-            // must not cancel the Hermes run itself: the chat/conductor should
-            // keep thinking server-side so the user can return and recover the
-            // answer from session history. Mark this client stream closed so we
-            // stop enqueueing SSE chunks, but deliberately leave the upstream
-            // abortController alone.
-            streamClosed = true
-            if (unregisterTimer) {
-              clearTimeout(unregisterTimer)
-              unregisterTimer = null
-            }
-            if (streamTimeoutTimer) {
-              clearTimeout(streamTimeoutTimer)
-              streamTimeoutTimer = null
-            }
-            if (activeRunId) {
-              persistActiveRun((runSessionKey, activeId) =>
-                markRunStatus(runSessionKey, activeId, 'handoff'),
-              )
-              unregisterActiveSendRun(activeRunId)
-              activeRunId = null
-            }
+            closeStream()
           },
         })
 
         return new Response(stream, {
           headers: {
             'Content-Type': 'text/event-stream; charset=utf-8',
-            'Cache-Control': 'no-cache, no-transform',
+            'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
-            'X-Accel-Buffering': 'no',
-            ...buildResolvedSessionHeaders({
-              sessionKey,
-              friendlyId: resolvedFriendlyId,
-            }),
+            'X-Hermes-Session-Key': sessionKey,
+            'X-Hermes-Friendly-Id': resolvedFriendlyId,
           },
         })
       },

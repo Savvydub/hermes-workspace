@@ -34,29 +34,6 @@ function mergeSessionTitle(
   }
 }
 
-function buildSyntheticActiveSession(
-  activeFriendlyId: string,
-  forcedSessionKey: string | undefined,
-  stored: SessionTitleInfo | undefined,
-): SessionMeta | null {
-  if (!activeFriendlyId || activeFriendlyId === 'new') return null
-
-  const derivedTitle =
-    stored?.title ?? (activeFriendlyId === 'main' ? 'Hermes' : 'New Session')
-
-  return {
-    key: forcedSessionKey || activeFriendlyId,
-    friendlyId: activeFriendlyId,
-    label: undefined,
-    title: undefined,
-    derivedTitle,
-    updatedAt: Date.now(),
-    titleStatus: stored?.status ?? 'idle',
-    titleSource: stored?.source,
-    titleError: stored?.error,
-  }
-}
-
 type UseChatSessionsInput = {
   activeFriendlyId: string
   isNewChat: boolean
@@ -78,35 +55,11 @@ export function useChatSessions({
   const sessions = useMemo(() => {
     const rawSessions = sessionsQuery.data ?? []
     const filtered = filterSessionsWithTombstones(rawSessions)
-    const merged = filtered.map((session) =>
+    if (!filtered.length) return filtered
+    return filtered.map((session) =>
       mergeSessionTitle(session, storedTitles[session.friendlyId]),
     )
-    const activeAlreadyPresent = merged.some(
-      (session) => session.friendlyId === activeFriendlyId,
-    )
-
-    if (!activeAlreadyPresent && (forcedSessionKey || isRecentSession(activeFriendlyId))) {
-      const synthetic = buildSyntheticActiveSession(
-        activeFriendlyId,
-        forcedSessionKey,
-        storedTitles[activeFriendlyId],
-      )
-      if (synthetic) {
-        merged.unshift(synthetic)
-      }
-    }
-
-    return merged.sort((a, b) => {
-      const aTs = a.updatedAt ?? 0
-      const bTs = b.updatedAt ?? 0
-      return bTs - aTs
-    })
-  }, [
-    activeFriendlyId,
-    forcedSessionKey,
-    sessionsQuery.data,
-    storedTitles,
-  ])
+  }, [sessionsQuery.data, storedTitles])
 
   const activeSession = useMemo(() => {
     return sessions.find((session) => session.friendlyId === activeFriendlyId)
@@ -127,7 +80,7 @@ export function useChatSessions({
       if (activeSession.titleStatus === 'error') return 'New Session'
       return 'New Session'
     }
-    return activeFriendlyId === 'main' ? 'Hermes' : activeFriendlyId
+    return activeFriendlyId === 'main' ? 'munr' : activeFriendlyId
   }, [activeFriendlyId, activeSession])
 
   const sessionsError =
